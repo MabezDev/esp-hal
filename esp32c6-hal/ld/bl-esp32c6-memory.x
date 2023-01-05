@@ -17,7 +17,7 @@ MEMORY
     /* 512K of on soc RAM, 32K reserved for cache */
     ICACHE : ORIGIN = 0x40800000,  LENGTH = 32K
     /* Instruction RAM */
-    IRAM : ORIGIN = 0x40800000 + 32K, LENGTH = 512K - 32K
+    IRAM : ORIGIN = 0x40800000 + 32K, LENGTH = 320K - 32K
     /* Data RAM */
     DRAM : ORIGIN = 0x40800000 + 32K, LENGTH = 512K - 32K
 
@@ -28,7 +28,7 @@ MEMORY
     DROM : ORIGIN = 0x42800000, LENGTH = 0x400000
 
     /* RTC fast memory (executable). Persists over deep sleep. */
-    RTC_FAST : ORIGIN = 0x50000000, LENGTH = 16K /*- ESP_BOOTLOADER_RESERVE_RTC*/    
+    RTC_FAST : ORIGIN = 0x50000000, LENGTH = 16K /*- ESP_BOOTLOADER_RESERVE_RTC*/
 }
 
 REGION_ALIAS("REGION_TEXT", IROM);

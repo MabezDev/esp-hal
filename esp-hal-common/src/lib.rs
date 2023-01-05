@@ -48,13 +48,15 @@ pub use procmacros as macros;
 //     uart::Uart,
 // };
 
+pub use self::{gpio::*, uart::Uart, timer::Timer, delay::Delay, interrupt::*, };
+
 // pub mod analog;
 pub mod clock;
 pub mod delay;
 // pub mod dma;
 #[cfg(feature = "embassy")]
 pub mod embassy;
-// pub mod gpio;
+pub mod gpio;
 // pub mod i2c;
 // #[cfg(i2s)]
 // pub mod i2s;
@@ -66,7 +68,7 @@ pub mod otg_fs;
 #[cfg(any(esp32, esp32s2, esp32s3))]
 pub mod pcnt;
 pub mod peripheral;
-// pub mod prelude;
+pub mod prelude;
 // #[cfg(rmt)]
 // pub mod pulse_control;
 pub mod rng;
@@ -79,7 +81,7 @@ pub mod system;
 #[cfg(systimer)]
 pub mod systimer;
 pub mod timer;
-// pub mod uart;
+pub mod uart;
 #[cfg(usb_serial_jtag)]
 pub mod usb_serial_jtag;
 // #[cfg(rmt)]
@@ -98,9 +100,9 @@ pub mod cpu_control;
 #[cfg_attr(esp32s3, path = "efuse/esp32s3.rs")]
 pub mod efuse;
 
-// #[cfg_attr(riscv, path = "interrupt/riscv.rs")]
-// #[cfg_attr(xtensa, path = "interrupt/xtensa.rs")]
-// pub mod interrupt;
+#[cfg_attr(riscv, path = "interrupt/riscv.rs")]
+#[cfg_attr(xtensa, path = "interrupt/xtensa.rs")]
+pub mod interrupt;
 
 /// Enumeration of CPU cores
 /// The actual number of available cores depends on the target.
