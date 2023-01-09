@@ -206,7 +206,7 @@ pub(crate) mod private {
             len: usize,
         ) -> Result<(), DmaError>;
 
-        fn is_done(&mut self) -> bool;
+        fn is_done(&self) -> bool;
 
         fn available(&mut self) -> usize;
 
@@ -285,7 +285,7 @@ pub(crate) mod private {
             Ok(())
         }
 
-        fn is_done(&mut self) -> bool {
+        fn is_done(&self) -> bool {
             R::is_in_done()
         }
 
@@ -306,6 +306,8 @@ pub(crate) mod private {
         pub available: usize,
         pub last_seen_handled_descriptor_ptr: *const u32,
         pub read_buffer_start: *const u8,
+        #[cfg(feature = "async")]
+        pub(crate) channel_index: usize,
         pub _phantom: PhantomData<R>,
     }
 
@@ -351,7 +353,7 @@ pub(crate) mod private {
             Ok(())
         }
 
-        fn is_done(&mut self) -> bool {
+        fn is_done(&self) -> bool {
             self.rx_impl.is_done()
         }
 
@@ -463,7 +465,7 @@ pub(crate) mod private {
             len: usize,
         ) -> Result<(), DmaError>;
 
-        fn is_done(&mut self) -> bool;
+        fn is_done(&self) -> bool;
 
         fn available(&mut self) -> usize;
 
@@ -540,7 +542,7 @@ pub(crate) mod private {
             Ok(())
         }
 
-        fn is_done(&mut self) -> bool {
+        fn is_done(&self) -> bool {
             R::is_out_done()
         }
 
@@ -573,6 +575,8 @@ pub(crate) mod private {
         pub buffer_start: *const u8,
         pub buffer_len: usize,
         pub _phantom: PhantomData<R>,
+        #[cfg(feature = "async")]
+        pub(crate) channel_index: usize,
     }
 
     impl<'a, T, R> Tx for ChannelTx<'a, T, R>
@@ -620,7 +624,7 @@ pub(crate) mod private {
             Ok(())
         }
 
-        fn is_done(&mut self) -> bool {
+        fn is_done(&self) -> bool {
             self.tx_impl.is_done()
         }
 
@@ -747,6 +751,9 @@ pub(crate) mod private {
         fn reset_out_eof_interrupt();
         fn last_out_dscr_address() -> usize;
 
+        // fn enable_in_done_interrupt();
+        // fn enable_out_done_interrupt();
+
         fn set_in_burstmode(burst_mode: bool);
         fn set_in_priority(priority: DmaPriority);
         fn clear_in_interrupts();
@@ -769,6 +776,8 @@ where
 {
     pub(crate) tx: TX,
     pub(crate) rx: RX,
+    #[cfg(feature = "async")]
+    pub(crate) channel_index: usize,
     _phantom: PhantomData<P>,
 }
 
@@ -784,4 +793,111 @@ pub trait DmaTransfer<B, T>: Drop {
 pub trait DmaTransferRxTx<BR, BT, T>: Drop {
     /// Wait for the transfer to finish.
     fn wait(self) -> (BR, BT, T);
+}
+
+#[cfg(feature = "async")]
+pub(crate) mod asynch {
+    use core::task::Poll;
+    use crate::macros::interrupt;
+    use embassy_sync::waitqueue::AtomicWaker;
+
+    use super::*;
+
+    pub const NUM_CHANNELS: usize = 3;
+
+    #[allow(clippy::declare_interior_mutable_const)]
+    const NEW_AW: AtomicWaker = AtomicWaker::new();
+    static CHANNEL_IN_WAKERS: [AtomicWaker; NUM_CHANNELS] = [NEW_AW; NUM_CHANNELS];
+    static CHANNEL_OUT_WAKERS: [AtomicWaker; NUM_CHANNELS] = [NEW_AW; NUM_CHANNELS];
+
+    impl<'a, T, R> core::future::Future for ChannelTx<'a, T, R>
+    where
+        T: TxChannel<R>,
+        R: RegisterAccess,
+    {
+        type Output = ();
+
+        fn poll(
+            self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+        ) -> Poll<Self::Output> {
+            CHANNEL_OUT_WAKERS[self.channel_index].register(cx.waker());
+
+            if self.is_done() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
+    impl<'a, T, R> core::future::Future for ChannelRx<'a, T, R>
+    where
+        T: RxChannel<R>,
+        R: RegisterAccess,
+    {
+        type Output = ();
+
+        fn poll(
+            self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+        ) -> Poll<Self::Output> {
+            CHANNEL_IN_WAKERS[self.channel_index].register(cx.waker());
+
+            if self.is_done() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+    }
+
+    #[interrupt]
+    fn DMA_CH0() {
+        let gdma = unsafe { &*crate::peripherals::DMA::PTR };
+        // TODO this is called twice per loop iteration for some reason when running the spi_loopback_dma example
+        esp_println::println!("DMA_CH0 - raw bits: {}", gdma.int_raw_ch0.read().bits());
+        type Channel = crate::dma::gdma::private::Channel0;
+        
+        if Channel::is_in_done() {
+            esp_println::println!("DMA_CH0:IN:WAKE");
+            Channel::clear_in_interrupts();
+            CHANNEL_IN_WAKERS[0].wake()
+        }
+
+        if Channel::is_out_done() {
+            esp_println::println!("DMA_CH0:OUT:WAKE");
+            Channel::clear_out_interrupts();
+            CHANNEL_OUT_WAKERS[0].wake()
+        }
+
+
+    }
+
+    // #[interrupt]
+    // fn DMA_CH1() {
+    //     type Channel = crate::dma::gdma::private::Channel1;
+
+    //     if Channel::is_out_done() {
+    //         CHANNEL_OUT_WAKERS[1].wake()
+    //     }
+
+    //     if Channel::is_in_done() {
+    //         CHANNEL_IN_WAKERS[1].wake()
+    //     }
+    // }
+
+    // #[interrupt]
+    // fn DMA_CH2() {
+    //     type Channel = crate::dma::gdma::private::Channel2;
+
+    //     if Channel::is_out_done() {
+    //         CHANNEL_OUT_WAKERS[2].wake()
+    //     }
+
+    //     if Channel::is_in_done() {
+    //         CHANNEL_IN_WAKERS[2].wake()
+    //     }
+    // }
+    
 }

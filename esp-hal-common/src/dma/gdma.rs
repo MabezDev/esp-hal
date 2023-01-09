@@ -296,6 +296,8 @@ macro_rules! impl_channel {
                         last_seen_handled_descriptor_ptr: core::ptr::null(),
                         buffer_start: core::ptr::null(),
                         buffer_len: 0,
+                        #[cfg(feature = "async")]
+                        channel_index: $num,
                         _phantom: PhantomData::default(),
                     };
 
@@ -310,12 +312,16 @@ macro_rules! impl_channel {
                         available: 0,
                         last_seen_handled_descriptor_ptr: core::ptr::null(),
                         read_buffer_start: core::ptr::null(),
+                        #[cfg(feature = "async")]
+                        channel_index: $num,
                         _phantom: PhantomData::default(),
                     };
 
                     Channel {
                         tx: tx_channel,
                         rx: rx_channel,
+                        #[cfg(feature = "async")]
+                        channel_index: $num,
                         _phantom: PhantomData::default(),
                     }
                 }
