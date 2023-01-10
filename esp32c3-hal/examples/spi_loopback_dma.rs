@@ -16,13 +16,19 @@
 #![no_std]
 #![no_main]
 
+use embedded_hal::blocking::delay::*;
+use esp32c3_hal::prelude::_esp_hal_spi_dma_WithDmaSpi2;
+use esp32c3_hal::prelude::_fugit_RateExtU32;
+use embedded_hal::prelude::_embedded_hal_watchdog_WatchdogDisable;
+use esp32c3_hal::prelude::_esp_hal_system_SystemExt;
+
 use esp32c3_hal::{
     clock::ClockControl,
     dma::DmaPriority,
     gdma::Gdma,
     gpio::IO,
     peripherals::Peripherals,
-    prelude::*,
+    // prelude::*,
     spi::{Spi, SpiMode},
     timer::TimerGroup,
     Delay,
@@ -81,19 +87,13 @@ fn main() -> ! {
         DmaPriority::Priority0,
     ));
 
-    // TODO make this a dma API?
-    // TODO interrupts should be setup in embassy::init when `async` feature is enabled - probably
-    let gdma = unsafe { &*esp32c3_hal::peripherals::DMA::PTR };
-    gdma.int_ena_ch0.write(|w| unsafe { w.bits(0) });
-    gdma.int_ena_ch0.write(|w| w.out_total_eof().set_bit());
-
     esp32c3_hal::interrupt::enable(esp32c3_hal::peripherals::Interrupt::DMA_CH0, esp32c3_hal::interrupt::Priority::Priority1).unwrap();
 
     let mut delay = Delay::new(&clocks);
 
     // DMA buffer require a static life-time
-    let mut send = buffer1();
-    let mut receive = buffer2();
+    let send = buffer1();
+    let receive = buffer2();
     let mut i = 0;
 
     for (i, v) in send.iter_mut().enumerate() {
@@ -105,11 +105,17 @@ fn main() -> ! {
         send[send.len() - 1] = i;
         i = i.wrapping_add(1);
 
-        let transfer = spi.dma_transfer(send, receive).unwrap();
-        // here we could do something else while DMA transfer is in progress
-        // the buffers and spi is moved into the transfer and we can get it back via
-        // `wait`
-        (receive, send, spi) = transfer.wait();
+        // let transfer = spi.dma_transfer(send, receive).unwrap();
+        // // here we could do something else while DMA transfer is in progress
+        // // the buffers and spi is moved into the transfer and we can get it back via
+        // // `wait`
+        // (receive, send, spi) = transfer.wait();
+        use embedded_hal_async::spi::SpiBus;
+        embassy_futures::block_on(async {
+            spi.transfer(&mut receive[..], &send[..]).await
+        }).unwrap();
+
+
         println!(
             "{:x?} .. {:x?}",
             &receive[..10],

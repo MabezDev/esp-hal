@@ -586,6 +586,125 @@ pub mod dma {
         }
     }
 
+    #[cfg(feature = "async")]
+    mod asynch {
+
+        use super::*;
+
+        impl<'d, T, TX, RX, P> embedded_hal_async::spi::SpiBusWrite for SpiDma<'d, T, TX, RX, P>
+        where
+            T: InstanceDma<TX, RX>,
+            TX: Tx,
+            RX: Rx,
+            P: SpiPeripheral,
+        {
+            async fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+                let gdma = unsafe { &*crate::peripherals::DMA::PTR };
+                gdma.int_ena_ch0.write(|w| w.out_total_eof().set_bit());
+                self.spi.start_write_bytes_dma(
+                    words.as_ptr(),
+                    words.len(),
+                    &mut self.channel.tx,
+                )?;
+
+                crate::dma::asynch::DmaTxFuture {
+                    tx: &mut self.channel.tx,
+                    channel_index: self.channel.channel_index,
+                }
+                .await; // TODO handle errors
+
+                Ok(())
+            }
+        }
+
+        impl<'d, T, TX, RX, P> embedded_hal_async::spi::SpiBusFlush for SpiDma<'d, T, TX, RX, P>
+        where
+            T: InstanceDma<TX, RX>,
+            TX: Tx,
+            RX: Rx,
+            P: SpiPeripheral,
+        {
+            async fn flush(&mut self) -> Result<(), Self::Error> {
+                Ok(()) // TODO does this need impl?
+            }
+        }
+
+        impl<'d, T, TX, RX, P> embedded_hal_async::spi::SpiBusRead for SpiDma<'d, T, TX, RX, P>
+        where
+            T: InstanceDma<TX, RX>,
+            TX: Tx,
+            RX: Rx,
+            P: SpiPeripheral,
+        {
+            async fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
+                let gdma = unsafe { &*crate::peripherals::DMA::PTR };
+                gdma.int_ena_ch0.write(|w| w.in_suc_eof().set_bit());
+
+                self.spi.start_read_bytes_dma(
+                    words.as_mut_ptr(),
+                    words.len(),
+                    &mut self.channel.rx,
+                )?;
+
+                crate::dma::asynch::DmaRxFuture {
+                    rx: &mut self.channel.rx,
+                    channel_index: self.channel.channel_index,
+                }
+                .await;
+
+                Ok(())
+            }
+        }
+
+        impl<'d, T, TX, RX, P> embedded_hal_async::spi::SpiBus for SpiDma<'d, T, TX, RX, P>
+        where
+            T: InstanceDma<TX, RX>,
+            TX: Tx,
+            RX: Rx,
+            P: SpiPeripheral,
+        {
+            async fn transfer<'a>(
+                &'a mut self,
+                read: &'a mut [u8],
+                write: &'a [u8],
+            ) -> Result<(), Self::Error> {
+                self.spi.start_transfer_dma(
+                    write.as_ptr(),
+                    write.len(),
+                    read.as_mut_ptr(),
+                    read.len(),
+                    &mut self.channel.tx,
+                    &mut self.channel.rx,
+                )?;
+
+                let gdma = unsafe { &*crate::peripherals::DMA::PTR };
+                gdma.int_ena_ch0
+                    .write(|w| w.out_total_eof().set_bit().in_suc_eof().set_bit());
+
+                embassy_futures::join::join(
+                    crate::dma::asynch::DmaTxFuture {
+                        tx: &mut self.channel.tx,
+                        channel_index: self.channel.channel_index,
+                    },
+                    crate::dma::asynch::DmaRxFuture {
+                        rx: &mut self.channel.rx,
+                        channel_index: self.channel.channel_index,
+                    },
+                )
+                .await;
+
+                Ok(())
+            }
+
+            async fn transfer_in_place<'a>(
+                &'a mut self,
+                words: &'a mut [u8],
+            ) -> Result<(), Self::Error> {
+                todo!()
+            }
+        }
+    }
+
     #[cfg(feature = "eh1")]
     mod ehal1 {
         use embedded_hal_1::spi::{SpiBus, SpiBusFlush, SpiBusRead, SpiBusWrite};

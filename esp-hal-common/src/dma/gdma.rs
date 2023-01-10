@@ -263,6 +263,15 @@ macro_rules! impl_channel {
                     let dma = unsafe { &*crate::peripherals::DMA::PTR };
                     dma.[<in_dscr_bf0_ch $num>].read().inlink_dscr_bf0().bits() as usize
                 }
+
+                fn is_listening_in_eof() -> bool {
+                    let dma = unsafe { &*crate::peripherals::DMA::PTR };
+                    dma.[<int_ena_ch $num>].read().in_suc_eof().bit_is_set()
+                }
+                fn is_listening_out_eof() -> bool {
+                    let dma = unsafe { &*crate::peripherals::DMA::PTR };
+                    dma.[<int_ena_ch $num>].read().out_total_eof().bit_is_set()
+                }
             }
 
             pub struct [<Channel $num TxImpl>] {}

@@ -208,6 +208,8 @@ pub(crate) mod private {
 
         fn is_done(&self) -> bool;
 
+        fn is_listening_eof(&self) -> bool;
+
         fn available(&mut self) -> usize;
 
         fn pop(&mut self, data: &mut [u8]) -> Result<usize, DmaError>;
@@ -446,6 +448,10 @@ pub(crate) mod private {
 
             Ok(len)
         }
+
+        fn is_listening_eof(&self) -> bool {
+            R::is_listening_in_eof()
+        }
     }
 
     /// DMA Tx
@@ -464,6 +470,8 @@ pub(crate) mod private {
             data: *const u8,
             len: usize,
         ) -> Result<(), DmaError>;
+
+        fn is_listening_eof(&self) -> bool;
 
         fn is_done(&self) -> bool;
 
@@ -734,6 +742,10 @@ pub(crate) mod private {
 
             Ok(data.len())
         }
+
+        fn is_listening_eof(&self) -> bool {
+            R::is_listening_out_eof()
+        }
     }
 
     pub trait RegisterAccess {
@@ -753,6 +765,9 @@ pub(crate) mod private {
 
         // fn enable_in_done_interrupt();
         // fn enable_out_done_interrupt();
+
+        fn is_listening_in_eof() -> bool;
+        fn is_listening_out_eof() -> bool;
 
         fn set_in_burstmode(burst_mode: bool);
         fn set_in_priority(priority: DmaPriority);
@@ -811,10 +826,14 @@ pub(crate) mod asynch {
     static CHANNEL_IN_WAKERS: [AtomicWaker; NUM_CHANNELS] = [NEW_AW; NUM_CHANNELS];
     static CHANNEL_OUT_WAKERS: [AtomicWaker; NUM_CHANNELS] = [NEW_AW; NUM_CHANNELS];
 
-    impl<'a, T, R> core::future::Future for ChannelTx<'a, T, R>
+    pub struct DmaTxFuture<'a, TX> {
+        pub(crate) tx: &'a mut TX,
+        pub(crate) channel_index: usize,
+    }
+
+    impl<'a, TX> core::future::Future for DmaTxFuture<'a, TX>
     where
-        T: TxChannel<R>,
-        R: RegisterAccess,
+        TX: Tx,
     {
         type Output = ();
 
@@ -823,19 +842,22 @@ pub(crate) mod asynch {
             cx: &mut core::task::Context<'_>,
         ) -> Poll<Self::Output> {
             CHANNEL_OUT_WAKERS[self.channel_index].register(cx.waker());
-
-            if self.is_done() {
-                Poll::Ready(())
-            } else {
+            if self.tx.is_listening_eof() {
                 Poll::Pending
+            } else {
+                Poll::Ready(())
             }
         }
     }
 
-    impl<'a, T, R> core::future::Future for ChannelRx<'a, T, R>
+    pub struct DmaRxFuture<'a, RX> {
+        pub(crate) rx: &'a mut RX,
+        pub(crate) channel_index: usize,
+    }
+
+    impl<'a, RX> core::future::Future for DmaRxFuture<'a, RX>
     where
-        T: RxChannel<R>,
-        R: RegisterAccess,
+        RX: Rx,
     {
         type Output = ();
 
@@ -844,11 +866,10 @@ pub(crate) mod asynch {
             cx: &mut core::task::Context<'_>,
         ) -> Poll<Self::Output> {
             CHANNEL_IN_WAKERS[self.channel_index].register(cx.waker());
-
-            if self.is_done() {
-                Poll::Ready(())
-            } else {
+            if self.rx.is_listening_eof() {
                 Poll::Pending
+            } else {
+                Poll::Ready(())
             }
         }
     }
@@ -861,15 +882,19 @@ pub(crate) mod asynch {
         fn DMA_CH0() {
             type Channel = crate::dma::gdma::private::Channel0;
 
+            let gdma = unsafe { &*crate::peripherals::DMA::PTR };
+            
             if Channel::is_in_done() {
                 esp_println::println!("DMA_CH0:IN:WAKE");
                 Channel::clear_in_interrupts();
+                gdma.int_ena_ch0.modify(|_, w| w.in_suc_eof().clear_bit());
                 CHANNEL_IN_WAKERS[0].wake()
             }
 
             if Channel::is_out_done() {
                 esp_println::println!("DMA_CH0:OUT:WAKE");
                 Channel::clear_out_interrupts();
+                gdma.int_ena_ch0.modify(|_, w| w.out_total_eof().clear_bit());
                 CHANNEL_OUT_WAKERS[0].wake()
             }
         }

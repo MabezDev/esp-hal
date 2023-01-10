@@ -20,6 +20,9 @@
 
 #![no_std]
 #![cfg_attr(xtensa, feature(asm_experimental_arch))]
+#![allow(incomplete_features)]
+#![feature(async_fn_in_trait)]
+#![feature(impl_trait_projections)]
 
 #[cfg_attr(esp32, path = "peripherals/esp32.rs")]
 #[cfg_attr(esp32c3, path = "peripherals/esp32c3.rs")]
