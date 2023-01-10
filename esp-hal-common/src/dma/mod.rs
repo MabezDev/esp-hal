@@ -505,7 +505,7 @@ pub(crate) mod private {
 
                 let mut dw0 = &mut descriptors[descr];
 
-                dw0.set_suc_eof(true);
+                dw0.set_suc_eof(last);
                 dw0.set_owner(Owner::Dma);
                 dw0.set_size(chunk_size as u16); // align to 32 bits?
                 dw0.set_length(chunk_size as u16); // actual size of the data!?
@@ -798,10 +798,11 @@ pub trait DmaTransferRxTx<BR, BT, T>: Drop {
 #[cfg(feature = "async")]
 pub(crate) mod asynch {
     use core::task::Poll;
-    use crate::macros::interrupt;
+
     use embassy_sync::waitqueue::AtomicWaker;
 
     use super::*;
+    use crate::macros::interrupt;
 
     pub const NUM_CHANNELS: usize = 3;
 
@@ -852,52 +853,56 @@ pub(crate) mod asynch {
         }
     }
 
-    #[interrupt]
-    fn DMA_CH0() {
-        let gdma = unsafe { &*crate::peripherals::DMA::PTR };
-        // TODO this is called twice per loop iteration for some reason when running the spi_loopback_dma example
-        esp_println::println!("DMA_CH0 - raw bits: {}", gdma.int_raw_ch0.read().bits());
-        type Channel = crate::dma::gdma::private::Channel0;
-        
-        if Channel::is_in_done() {
-            esp_println::println!("DMA_CH0:IN:WAKE");
-            Channel::clear_in_interrupts();
-            CHANNEL_IN_WAKERS[0].wake()
+    #[cfg(any(esp32c3, esp32c2))]
+    mod interrupt {
+        use super::*;
+
+        #[interrupt]
+        fn DMA_CH0() {
+            type Channel = crate::dma::gdma::private::Channel0;
+
+            if Channel::is_in_done() {
+                esp_println::println!("DMA_CH0:IN:WAKE");
+                Channel::clear_in_interrupts();
+                CHANNEL_IN_WAKERS[0].wake()
+            }
+
+            if Channel::is_out_done() {
+                esp_println::println!("DMA_CH0:OUT:WAKE");
+                Channel::clear_out_interrupts();
+                CHANNEL_OUT_WAKERS[0].wake()
+            }
         }
 
-        if Channel::is_out_done() {
-            esp_println::println!("DMA_CH0:OUT:WAKE");
-            Channel::clear_out_interrupts();
-            CHANNEL_OUT_WAKERS[0].wake()
+        #[interrupt]
+        fn DMA_CH1() {
+            type Channel = crate::dma::gdma::private::Channel1;
+
+            if Channel::is_out_done() {
+                CHANNEL_OUT_WAKERS[1].wake()
+            }
+
+            if Channel::is_in_done() {
+                CHANNEL_IN_WAKERS[1].wake()
+            }
         }
 
+        #[interrupt]
+        fn DMA_CH2() {
+            type Channel = crate::dma::gdma::private::Channel2;
 
+            if Channel::is_out_done() {
+                CHANNEL_OUT_WAKERS[2].wake()
+            }
+
+            if Channel::is_in_done() {
+                CHANNEL_IN_WAKERS[2].wake()
+            }
+        }
     }
 
-    // #[interrupt]
-    // fn DMA_CH1() {
-    //     type Channel = crate::dma::gdma::private::Channel1;
-
-    //     if Channel::is_out_done() {
-    //         CHANNEL_OUT_WAKERS[1].wake()
-    //     }
-
-    //     if Channel::is_in_done() {
-    //         CHANNEL_IN_WAKERS[1].wake()
-    //     }
-    // }
-
-    // #[interrupt]
-    // fn DMA_CH2() {
-    //     type Channel = crate::dma::gdma::private::Channel2;
-
-    //     if Channel::is_out_done() {
-    //         CHANNEL_OUT_WAKERS[2].wake()
-    //     }
-
-    //     if Channel::is_in_done() {
-    //         CHANNEL_IN_WAKERS[2].wake()
-    //     }
-    // }
-    
+    #[cfg(esp32s3)]
+    mod interrupt {
+        use super::*;
+    }
 }

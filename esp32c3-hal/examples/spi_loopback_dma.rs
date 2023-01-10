@@ -82,9 +82,10 @@ fn main() -> ! {
     ));
 
     // TODO make this a dma API?
-    // TODO should interrupts be setup in embassy::init when `async` feature is enabled - probably
+    // TODO interrupts should be setup in embassy::init when `async` feature is enabled - probably
     let gdma = unsafe { &*esp32c3_hal::peripherals::DMA::PTR };
-    gdma.int_ena_ch0.modify(|_, w| w.out_total_eof().set_bit());
+    gdma.int_ena_ch0.write(|w| unsafe { w.bits(0) });
+    gdma.int_ena_ch0.write(|w| w.out_total_eof().set_bit());
 
     esp32c3_hal::interrupt::enable(esp32c3_hal::peripherals::Interrupt::DMA_CH0, esp32c3_hal::interrupt::Priority::Priority1).unwrap();
 
