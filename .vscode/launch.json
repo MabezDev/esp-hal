@@ -1,0 +1,25 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug",
+            "type": "gdb",
+            "request": "attach",
+            "executable": "esp32s3-hal/target/xtensa-esp32s3-none-elf/debug/examples/systimer",
+            "cwd": "${workspaceRoot}",
+            "valuesFormatting": "parseText",
+            "remote": true,
+            "target": ":3333",
+            "gdbpath": "/home/mabez/.espressif/tools/xtensa-esp-elf-gdb/12.1_20221002/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb",
+            // "showDevDebugOutput": true,
+            "stopAtEntry": "main",
+            "autorun": [
+                "mon reset halt",
+                "flushregs"
+            ]
+        }
+    ]
+}

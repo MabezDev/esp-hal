@@ -49,10 +49,14 @@ pub mod analog {
 }
 
 #[no_mangle]
-extern "C" fn EspDefaultHandler(_level: u32, _interrupt: peripherals::Interrupt) {}
+extern "C" fn EspDefaultHandler(_level: u32, _interrupt: peripherals::Interrupt) {
+    esp_println::println!("EspDefaultHandler: {}, {:?}", _level, _interrupt);
+}
 
 #[no_mangle]
-extern "C" fn DefaultHandler() {}
+extern "C" fn DefaultHandler() {
+    esp_println::println!("DefaultHandler");
+}
 
 #[cfg(all(feature = "rt", feature = "direct-boot"))]
 #[doc(hidden)]

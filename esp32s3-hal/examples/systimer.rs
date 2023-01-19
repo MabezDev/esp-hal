@@ -4,7 +4,7 @@
 #![no_std]
 #![no_main]
 
-use core::cell::RefCell;
+use core::{cell::RefCell, sync::atomic::compiler_fence};
 
 use critical_section::Mutex;
 use esp32s3_hal::{
@@ -44,45 +44,56 @@ fn main() -> ! {
 
     println!("SYSTIMER Current value = {}", SystemTimer::now());
 
+    println!("ena 0");
     let alarm0 = syst.alarm0.into_periodic();
     alarm0.set_period(1u32.Hz());
     alarm0.interrupt_enable(true);
+
+    println!("ena 1");
 
     let alarm1 = syst.alarm1;
     alarm1.set_target(SystemTimer::now() + (SystemTimer::TICKS_PER_SECOND * 2));
     alarm1.interrupt_enable(true);
 
+    println!("ena 2");
     let alarm2 = syst.alarm2;
     alarm2.set_target(SystemTimer::now() + (SystemTimer::TICKS_PER_SECOND * 3));
     alarm2.interrupt_enable(true);
 
+    println!("replace");
     critical_section::with(|cs| {
         ALARM0.borrow_ref_mut(cs).replace(alarm0);
         ALARM1.borrow_ref_mut(cs).replace(alarm1);
         ALARM2.borrow_ref_mut(cs).replace(alarm2);
     });
 
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+    println!("int 0");
     interrupt::enable(
         peripherals::Interrupt::SYSTIMER_TARGET0,
-        Priority::Priority1,
-    )
-    .unwrap();
-    interrupt::enable(
-        peripherals::Interrupt::SYSTIMER_TARGET1,
         Priority::Priority2,
     )
     .unwrap();
-    interrupt::enable(
-        peripherals::Interrupt::SYSTIMER_TARGET2,
-        Priority::Priority3,
-    )
-    .unwrap();
+    // println!("int 1");
+    // interrupt::enable(
+    //     peripherals::Interrupt::SYSTIMER_TARGET1,
+    //     Priority::Priority2,
+    // )
+    // .unwrap();
+    // println!("int 2");
+    // interrupt::enable(
+    //     peripherals::Interrupt::SYSTIMER_TARGET2,
+    //     Priority::Priority3,
+    // )
+    // .unwrap();
 
     // Initialize the Delay peripheral, and use it to toggle the LED state in a
     // loop.
     let mut delay = Delay::new(&clocks);
 
     loop {
+        println!("loop");
         delay.delay_ms(500u32);
     }
 }

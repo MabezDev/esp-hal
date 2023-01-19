@@ -36,6 +36,7 @@ esp-hal-common     = { version = "0.4.0",  features = ["esp32s3"], path = "../es
 r0                 = { version = "1.0.0",  optional = true }
 xtensa-lx          = { version = "0.7.0",  features = ["esp32s3"] }
 xtensa-lx-rt       = { version = "0.14.0", features = ["esp32s3"], optional = true }
+esp-println       = { version = "0.3.1", features = ["esp32s3"] }
 
 [dev-dependencies]
 critical-section  = "1.1.1"
@@ -62,6 +63,16 @@ async                = ["esp-hal-common/async", "embedded-hal-async"]
 embassy              = ["esp-hal-common/embassy"]
 embassy-time-systick = ["esp-hal-common/embassy-time-systick", "embassy-time/tick-hz-16_000_000"]
 embassy-time-timg0    = ["esp-hal-common/embassy-time-timg0", "embassy-time/tick-hz-1_000_000"]
+
+[patch.crates-io]
+xtensa-lx-rt       = { version = "0.14.0", features = ["esp32s3"], path = "/home/mabez/development/rust/embedded/projects/xtensa-lx-rt" }
+# xtensa-lx-rt       = { version = "0.14.0", features = ["esp32s3"], git = "https://github.com/esp-rs/xtensa-lx-rt", branch = "feature/lld-fixes" }
+
+# [profile.release]
+# lto = true
+
+[profile.dev]
+opt-level = 'z'
 
 [[example]]
 name              = "hello_rgb"

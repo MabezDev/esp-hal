@@ -1,10 +1,19 @@
 [target.xtensa-esp32s3-none-elf]
 runner = "espflash flash --monitor"
+linker = "/home/mabez/downloads/esp-clang/bin/lld"
 
 [build]
 rustflags = [
-  "-C", "link-arg=-nostartfiles",
-  "-C", "link-arg=-Wl,-Tlinkall.x",
+  # GNU LD
+  # "-C", "link-arg=-nostartfiles",
+  # "-C", "link-arg=-Wl,-Tlinkall.x",
+  # "-C", "link-arg=-Wl,-Map=build.map"
+
+  # LLD
+  "-C", "link-arg=-Tlinkall.x",
+  "-C", "link-arg=-Map=build.map",
+
+  # "-C", "target-feature=-loop"
 ]
 target = "xtensa-esp32s3-none-elf"
 

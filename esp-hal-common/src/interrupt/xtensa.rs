@@ -379,6 +379,7 @@ mod vectored {
 
     #[ram]
     unsafe fn handle_interrupts(level: u32, save_frame: &mut Context) {
+        esp_println::println!("handle_interrupts");
         let cpu_interrupt_mask =
             interrupt::get() & interrupt::get_mask() & CPU_INTERRUPT_LEVELS[level as usize];
 

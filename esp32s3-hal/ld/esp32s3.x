@@ -34,7 +34,7 @@ SECTIONS {
 
     /* Create an empty gap as big as .text section */
 
-    . = SIZEOF(.text);
+    . += SIZEOF(.text);
 
     /* Prepare the alignment of the section above. Few bytes (0x20) must be
      * added for the mapping header.
@@ -89,7 +89,7 @@ SECTIONS {
     /*  Create an empty gap as big as .rwtext section - 32k (SRAM0) 
      *  because SRAM1 is available on the data bus and instruction bus 
      */
-    . = MAX(SIZEOF(.rwtext) + SIZEOF(.rwtext.wifi) + RESERVE_ICACHE + VECTORS_SIZE, 32k) - 32k;
+    . += MAX(SIZEOF(.rwtext) + SIZEOF(.rwtext.wifi) + RESERVE_ICACHE + VECTORS_SIZE, 32k) - 32k;
 
     /* Prepare the alignment of the section above. */
     . = ALIGN(4);
