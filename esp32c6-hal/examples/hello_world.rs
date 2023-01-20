@@ -33,6 +33,7 @@ use esp_println::println;
 
 #[riscv_rt::entry]
 fn main() -> ! {
+    esp_println::println!("fffff");
     let peripherals = Peripherals::take();
     let system = peripherals.PCR.split();
     // let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
