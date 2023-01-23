@@ -97,7 +97,8 @@ SECTIONS {
     _text_start = ABSOLUTE(.);
     . = ALIGN (4);
     KEEP(*(.init));
-    *(.literal .text .literal.* .text.*)
+    *(.literal .literal.*)
+    *(.text .text.*)
     . = ALIGN (4);
     _text_end = ABSOLUTE(.);
     _etext = .;
@@ -156,7 +157,8 @@ SECTIONS {
 
     _init_end = ABSOLUTE(.);
 
-    *(.rwtext.literal .rwtext .rwtext.literal.* .rwtext.*)
+    *(.rwtext.literal .rwtext.literal.*)
+    *(.rwtext .rwtext.*)
 
     . = ALIGN (4);
     _erwtext = .;
@@ -238,7 +240,8 @@ SECTIONS {
   {
    . = ALIGN(4);
    _rtc_slow_text_start = ABSOLUTE(.);
-    *(.rtc_slow.literal .rtc_slow.text .rtc_slow.literal.* .rtc_slow.text.*)
+    *(.rtc_slow.literal .rtc_slow.literal.*)
+    *(.rtc_slow.text .rtc_slow.text.*)
    . = ALIGN(4);
    _rtc_slow_text_end = ABSOLUTE(.);
   }

@@ -71,9 +71,6 @@ xtensa-lx-rt       = { version = "0.14.0", features = ["esp32s3"], path = "/home
 # [profile.release]
 # lto = true
 
-[profile.dev]
-opt-level = 'z'
-
 [[example]]
 name              = "hello_rgb"
 required-features = ["smartled"]

@@ -17,7 +17,8 @@ SECTIONS {
     . = ALIGN (4);
     _text_start = ABSOLUTE(.);
     . = ALIGN (4);
-    *(.literal .text .literal.* .text.*)
+    *(.literal .literal.*)
+    *(.text .text.*)
     _text_end = ABSOLUTE(.);
     _etext = .;
   } > ROTEXT
@@ -61,7 +62,8 @@ SECTIONS {
   .rwtext : ALIGN(4)
   {
     . = ALIGN (4);
-    *(.rwtext.literal .rwtext .rwtext.literal.* .rwtext.*)
+    *(.rwtext.literal .rwtext.literal.*)
+    *(.rwtext .rwtext.*)
   } > RWTEXT
 
   /* wifi data */

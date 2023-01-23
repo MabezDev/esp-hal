@@ -64,7 +64,8 @@ INCLUDE "alias.x"
 SECTIONS {
   .rtc_fast.text : {
    . = ALIGN(4);
-    *(.rtc_fast.literal .rtc_fast.text .rtc_fast.literal.* .rtc_fast.text.*)
+    *(.rtc_fast.literal .rtc_fast.literal.*)
+    *(.rtc_fast.text .rtc_fast.text.*)
   } > rtc_fast_iram_seg AT > RODATA
 
   /*
@@ -104,7 +105,8 @@ SECTIONS {
 
  .rtc_slow.text : {
    . = ALIGN(4);
-    *(.rtc_slow.literal .rtc_slow.text .rtc_slow.literal.* .rtc_slow.text.*)
+    *(.rtc_slow.literal .rtc_slow.literal.*)
+    *(.rtc_slow.text .rtc_slow.text.*)
   } > rtc_slow_seg AT > RODATA
 
   .rtc_slow.data :
