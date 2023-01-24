@@ -16,7 +16,7 @@ MEMORY
 
     /* 512K of on soc RAM, 32K reserved for cache */
     ICACHE : ORIGIN = 0x40800000,  LENGTH = 32K
-    /* Instriction and Data RAM */
+    /* Instruction and Data RAM */
     RAM : ORIGIN = 0x40800000 + 32K, LENGTH = 512K - 32K
 
     /* External flash */

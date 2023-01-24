@@ -21,6 +21,8 @@ use crate::{
 // general. However this makes things like preemtive multitasking easier in
 // future
 extern "C" {
+    #[cfg(feature = "esp32c6")]
+    fn interrupt0(frame: &mut TrapFrame);
     fn interrupt1(frame: &mut TrapFrame);
     fn interrupt2(frame: &mut TrapFrame);
     #[cfg(not(feature = "esp32c6"))]
@@ -71,7 +73,7 @@ pub enum InterruptKind {
 #[derive(Debug, Copy, Clone)]
 pub enum CpuInterrupt {
     #[cfg(feature = "esp32c6")]
-    // Interrupt0 = 0,
+    Interrupt0 = 0,
     Interrupt1 = 1,
     Interrupt2,
     Interrupt3,
@@ -508,6 +510,8 @@ pub unsafe extern "C" fn start_trap_rust_hal(trap_frame: *mut TrapFrame) {
     } else {
         let code = riscv::register::mcause::read().code();
         match code {
+            #[cfg(esp32c6)]
+            0 => interrupt0(trap_frame.as_mut().unwrap()),
             1 => interrupt1(trap_frame.as_mut().unwrap()),
             2 => interrupt2(trap_frame.as_mut().unwrap()),
             3 => interrupt3(trap_frame.as_mut().unwrap()),
