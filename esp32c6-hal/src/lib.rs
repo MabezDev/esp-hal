@@ -3,8 +3,25 @@
 use core::arch::{asm, global_asm};
 
 pub use embedded_hal as ehal;
-pub use esp_hal_common::{macros, peripherals, clock, gpio, prelude, uart, Uart, timer, Cpu, Delay, interrupt, i2c, ledc,
-systimer, dma, dma::gdma, spi, i2s, };
+pub use esp_hal_common::{
+    clock,
+    dma,
+    dma::gdma,
+    gpio,
+    i2c,
+    interrupt,
+    ledc,
+    macros,
+    peripherals,
+    prelude,
+    spi,
+    systimer,
+    timer,
+    uart,
+    Cpu,
+    Delay,
+    Uart,
+};
 
 pub use self::gpio::IO;
 
@@ -113,7 +130,7 @@ _start_trap_hal:
     sw s0, 30*4(sp)
 
     add a0, sp, zero
-    // jal ra, _start_trap_rust_hal
+    jal ra, _start_trap_rust_hal
 
     lw t1, 31*4(sp)
     csrrw x0, mepc, t1
@@ -166,9 +183,8 @@ unsafe fn start_hal() -> ! {
         r#"
         .option norelax
 
-        // unsupported on ESP32-C6
-        // csrw mie, 0
-        // csrw mip, 0
+        csrw mie, 0
+        csrw mip, 0
 
         li  x1, 0
         li  x2, 0
