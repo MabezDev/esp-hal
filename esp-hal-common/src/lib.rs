@@ -58,8 +58,8 @@ pub mod dma;
 pub mod embassy;
 pub mod gpio;
 pub mod i2c;
-// #[cfg(i2s)]
-// pub mod i2s;
+#[cfg(i2s)]
+pub mod i2s;
 pub mod ledc;
 // #[cfg(mcpwm)]
 // pub mod mcpwm;
