@@ -3,6 +3,8 @@
 //! When the `vectored` feature is enabled, CPU interrupts 1 through 15 are
 //! reserved for each of the possible interrupt priorities.
 //!
+//! On chips with a PLIC CPU interrupts 1,2,5,6,9 .. 19 are used.
+//!
 //! ```rust
 //! interrupt1() => Priority::Priority1
 //! interrupt2() => Priority::Priority2
@@ -287,15 +289,18 @@ mod vectored {
     const INTERRUPT_TO_PRIORITY: [usize; 15] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
     // don't use interrupts reserved for CLIC (0,3,4,7)
+    // for some reason also CPU interrupt 8 doesn't work as expected - so don't use
+    // that, too
     #[cfg(plic)]
     const PRIORITY_TO_INTERRUPT: [usize; 15] =
-        [1, 2, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+        [1, 2, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
 
     #[cfg(plic)]
-    const INTERRUPT_TO_PRIORITY: [usize; 18] =
-        [1, 2, 0, 0, 3, 4, 0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    const INTERRUPT_TO_PRIORITY: [usize; 19] = [
+        1, 2, 0, 0, 3, 4, 0, 0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    ];
 
-    // Setup interrupts 1-15 ready for vectoring
+    // Setup interrupts ready for vectoring
     #[doc(hidden)]
     pub(crate) unsafe fn init_vectoring() {
         for (prio, num) in PRIORITY_TO_INTERRUPT.iter().enumerate() {
@@ -525,6 +530,12 @@ mod vectored {
     pub unsafe fn interrupt18(context: &mut TrapFrame) {
         handle_interrupts(CpuInterrupt::Interrupt18, context)
     }
+    #[cfg(plic)]
+    #[no_mangle]
+    #[ram]
+    pub unsafe fn interrupt19(context: &mut TrapFrame) {
+        handle_interrupts(CpuInterrupt::Interrupt19, context)
+    }
 }
 
 /// Registers saved in trap handler
@@ -577,7 +588,6 @@ pub struct TrapFrame {
 #[link_section = ".trap.rust"]
 #[export_name = "_start_trap_rust_hal"]
 pub unsafe extern "C" fn start_trap_rust_hal(trap_frame: *mut TrapFrame) {
-    esp_println::println!("****");
     extern "C" {
         // defined in riscv-rt
         pub fn DefaultHandler();
