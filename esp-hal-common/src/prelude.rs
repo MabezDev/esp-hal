@@ -87,7 +87,9 @@ pub use crate::timer::{
 };
 #[cfg(any(uart0, uart1, uart2))]
 pub use crate::uart::{Instance as _esp_hal_uart_Instance, UartPins as _esp_hal_uart_UartPins};
-pub use crate::{clock::Clock as _esp_hal_clock_Clock, entry, macros::*};
+pub use crate::{clock::Clock as _esp_hal_clock_Clock, macros::*};
+#[cfg(feature = "rt")]
+pub use crate::entry;
 
 /// All traits required for using the 1.0.0-alpha.x release of embedded-hal
 #[cfg(feature = "eh1")]

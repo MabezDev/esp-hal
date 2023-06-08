@@ -32,7 +32,7 @@
 )]
 #![doc(html_logo_url = "https://avatars.githubusercontent.com/u/46717278")]
 
-#[cfg(riscv)]
+#[cfg(all(feature = "rt", riscv))]
 pub use esp_riscv_rt::{self, entry, riscv};
 pub use procmacros as macros;
 #[cfg(xtensa)]
@@ -50,7 +50,7 @@ pub use self::delay::Delay;
 pub use self::dma::gdma;
 #[cfg(pdma)]
 pub use self::dma::pdma;
-#[cfg(any(dport, interrupt_core0, interrupt_core1))]
+#[cfg(all(feature = "rt", any(dport, interrupt_core0, interrupt_core1)))]
 pub use self::interrupt::*;
 #[cfg(rmt)]
 pub use self::pulse_control::PulseControl;
@@ -91,7 +91,7 @@ pub mod gpio;
 pub mod i2c;
 #[cfg(any(i2s0, i2s1))]
 pub mod i2s;
-#[cfg(any(dport, interrupt_core0, interrupt_core1))]
+#[cfg(all(feature = "rt", any(dport, interrupt_core0, interrupt_core1)))]
 pub mod interrupt;
 #[cfg(ledc)]
 pub mod ledc;
@@ -134,6 +134,7 @@ pub mod uart;
 pub mod usb_serial_jtag;
 
 /// State of the CPU saved when entering exception or interrupt
+#[cfg(feature = "rt")]
 pub mod trapframe {
     #[cfg(riscv)]
     pub use esp_riscv_rt::TrapFrame;
@@ -220,7 +221,7 @@ mod critical_section_impl {
 
     #[cfg(riscv)]
     mod riscv {
-        use esp_riscv_rt::riscv;
+        use riscv;
 
         unsafe impl critical_section::Impl for super::CriticalSection {
             unsafe fn acquire() -> critical_section::RawRestoreState {
