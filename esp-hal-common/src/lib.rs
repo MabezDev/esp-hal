@@ -134,7 +134,11 @@ pub mod uart;
 pub mod usb_serial_jtag;
 
 /// State of the CPU saved when entering exception or interrupt
+<<<<<<< Updated upstream
 #[cfg(feature = "rt")]
+=======
+#[cfg(all(feature = "rt", any(dport, interrupt_core0, interrupt_core1)))]
+>>>>>>> Stashed changes
 pub mod trapframe {
     #[cfg(riscv)]
     pub use esp_riscv_rt::TrapFrame;
