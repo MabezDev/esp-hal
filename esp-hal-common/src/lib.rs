@@ -151,11 +151,15 @@ pub mod trapframe {
 mod soc;
 
 #[no_mangle]
-extern "C" fn EspDefaultHandler(_level: u32, _interrupt: peripherals::Interrupt) {}
+extern "C" fn EspDefaultHandler(_level: u32, _interrupt: peripherals::Interrupt) {
+    log::warn!("Calling EspDefaultHandler for {_level}, {_interrupt:?}")
+}
 
 #[cfg(xtensa)]
 #[no_mangle]
-extern "C" fn DefaultHandler() {}
+extern "C" fn DefaultHandler() {
+    log::warn!("Calling DefaultHandler")
+}
 
 /// Available CPU cores
 ///

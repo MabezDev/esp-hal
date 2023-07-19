@@ -30,6 +30,8 @@ fn main() -> ! {
     let mut system = peripherals.SYSTEM.split();
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
+    esp_println::logger::init_logger_from_env();
+
     let mut rtc = Rtc::new(peripherals.RTC_CNTL);
     let timer_group0 = TimerGroup::new(
         peripherals.TIMG0,
@@ -48,17 +50,23 @@ fn main() -> ! {
 
     usb_serial.listen_rx_packet_recv_interrupt();
 
+    
     timer0.start(1u64.secs());
 
+    interrupt::disable_all(esp32s3_hal::get_core());
+    
     critical_section::with(|cs| USB_SERIAL.borrow_ref_mut(cs).replace(usb_serial));
-
     interrupt::enable(
         peripherals::Interrupt::USB_DEVICE,
         interrupt::Priority::Priority1,
     )
     .unwrap();
+    
+    unsafe { interrupt::map(esp32s3_hal::get_core(), peripherals::Interrupt::WIFI_BB, esp32s3_hal::interrupt::CpuInterrupt::Interrupt0LevelPriority1) };
+    // unsafe { interrupt::map(esp32s3_hal::get_core(), peripherals::Interrupt::WIFI_BB, esp32s3_hal::interrupt::CpuInterrupt::Interrupt27LevelPriority3) };
 
     loop {
+        esp_println::println!("In loop");
         critical_section::with(|cs| {
             writeln!(
                 USB_SERIAL.borrow_ref_mut(cs).as_mut().unwrap(),
@@ -73,6 +81,7 @@ fn main() -> ! {
 
 #[interrupt]
 fn USB_DEVICE() {
+    esp_println::println!("USB_DEVICE");
     critical_section::with(|cs| {
         let mut usb_serial = USB_SERIAL.borrow_ref_mut(cs);
         let usb_serial = usb_serial.as_mut().unwrap();
@@ -82,4 +91,19 @@ fn USB_DEVICE() {
         }
         usb_serial.reset_rx_packet_recv_interrupt();
     });
+}
+
+#[interrupt]
+fn WIFI_BB() {
+    esp_println::println!("USB_DEVICE");
+    critical_section::with(|cs| {
+        let mut usb_serial = USB_SERIAL.borrow_ref_mut(cs);
+        let usb_serial = usb_serial.as_mut().unwrap();
+        writeln!(usb_serial, "USB serial interrupt").unwrap();
+        while let nb::Result::Ok(c) = usb_serial.read_byte() {
+            writeln!(usb_serial, "Read byte: {:02x}", c).unwrap();
+        }
+        usb_serial.reset_rx_packet_recv_interrupt();
+    });
+    esp_println::println!("After servicing interrupt: {:128b}", interrupt::get_status(esp32s3_hal::get_core()));
 }

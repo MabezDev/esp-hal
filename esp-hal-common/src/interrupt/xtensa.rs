@@ -13,6 +13,7 @@ use crate::{
 #[allow(unused)]
 #[derive(Debug, Copy, Clone)]
 #[repr(u32)]
+#[derive(num_derive::FromPrimitive)]
 pub enum CpuInterrupt {
     Interrupt0LevelPriority1 = 0,
     Interrupt1LevelPriority1,
@@ -62,16 +63,32 @@ pub enum CpuInterrupt {
 /// Note: this only maps the interrupt to the CPU interrupt. The CPU interrupt
 /// still needs to be enabled afterwards
 pub unsafe fn map(core: Cpu, interrupt: Interrupt, which: CpuInterrupt) {
+    // TODO remove
     let interrupt_number = interrupt as isize;
     let cpu_interrupt_number = which as isize;
+    // log::info!(
+    //     "[{}], before: {:?}",
+    //     interrupt_number,
+    //     get_configured_interrupts(crate::get_core(), !0)
+    // );
     let intr_map_base = match core {
         Cpu::ProCpu => (*core0_interrupt_peripheral()).pro_mac_intr_map.as_ptr(),
         #[cfg(multi_core)]
         Cpu::AppCpu => (*core1_interrupt_peripheral()).app_mac_intr_map.as_ptr(),
     };
-    intr_map_base
-        .offset(interrupt_number)
-        .write_volatile(cpu_interrupt_number as u32);
+    let address = intr_map_base.offset(interrupt_number);
+    log::info!("Writing {}, to address {:?}", cpu_interrupt_number, address);
+    address.write_volatile(cpu_interrupt_number as u32);
+    log::info!(
+        "Read {}, from address {:?}",
+        address.read_volatile(),
+        address
+    );
+
+    // log::info!(
+    //     "after: {:?}",
+    //     get_configured_interrupts(crate::get_core(), !0)
+    // );
 }
 
 /// Disable the given peripheral interrupt
@@ -83,7 +100,21 @@ pub fn disable(core: Cpu, interrupt: Interrupt) {
             #[cfg(multi_core)]
             Cpu::AppCpu => (*core1_interrupt_peripheral()).app_mac_intr_map.as_ptr(),
         };
-        intr_map_base.offset(interrupt_number).write_volatile(0);
+        intr_map_base.offset(interrupt_number).write_volatile(16); // interrupt 16 chosen as its a CPU peripheral
+    }
+}
+
+pub fn disable_all(core: Cpu) {
+    unsafe {
+        let intr_map_base = match core {
+            Cpu::ProCpu => (*core0_interrupt_peripheral()).pro_mac_intr_map.as_ptr(),
+            #[cfg(multi_core)]
+            Cpu::AppCpu => (*core1_interrupt_peripheral()).app_mac_intr_map.as_ptr(),
+        };
+        // TODO 99 for esp32s3
+        for i in 0..99 {
+            intr_map_base.offset(i).write_volatile(16); // interrupt 16 chosen as its a CPU peripheral
+        }
     }
 }
 
@@ -96,6 +127,32 @@ pub fn clear(_core: Cpu, which: CpuInterrupt) {
 
 /// Get status of peripheral interrupts
 pub fn get_status(core: Cpu) -> u128 {
+    unsafe {
+    log::info!("Get status: {:032b} | {:032b} | {:032b} | {:032b}", (*core0_interrupt_peripheral())
+                    .pro_intr_status_0
+                    .read()
+                    .bits(), 
+                    (*core0_interrupt_peripheral())
+                    .pro_intr_status_1
+                    .read()
+                    .bits(), 
+                    (*core0_interrupt_peripheral())
+                    .pro_intr_status_2
+                    .read()
+                    .bits(),
+                (*core0_interrupt_peripheral())
+                    .pro_intr_status_2
+                    .read()
+                    .bits());
+    let address = 0x600c218C as *const u32;
+    log::info!("Manual read of {address:?} => {:032b}", address.read_volatile());
+    let address = address.offset(1);
+    log::info!("Manual read of {address:?} => {:032b}", address.read_volatile());
+    let address = address.offset(1);
+    log::info!("Manual read of {address:?} => {:032b}", address.read_volatile());
+    let address = address.offset(1);
+    log::info!("Manual read of {address:?} => {:032b}", address.read_volatile());
+    }
     unsafe {
         match core {
             Cpu::ProCpu => {
@@ -113,6 +170,11 @@ pub fn get_status(core: Cpu) -> u128 {
                         .read()
                         .bits() as u128)
                         << 64
+                    | ((*core0_interrupt_peripheral())
+                        .pro_intr_status_3
+                        .read()
+                        .bits() as u128)
+                        << 96
             }
             #[cfg(multi_core)]
             Cpu::AppCpu => {
@@ -239,7 +301,7 @@ mod vectored {
 
     /// Get the interrupts configured for the core
     #[inline]
-    fn get_configured_interrupts(core: Cpu, mut status: u128) -> [u128; 8] {
+    pub(crate) fn get_configured_interrupts(core: Cpu, mut status: u128) -> [u128; 8] {
         unsafe {
             let intr_map_base = match core {
                 Cpu::ProCpu => (*core0_interrupt_peripheral()).pro_mac_intr_map.as_ptr(),
@@ -248,14 +310,18 @@ mod vectored {
             };
 
             let mut levels = [0u128; 8];
-
+            log::info!("Status: {status}");
             while status != 0 {
                 let interrupt_nr = status.trailing_zeros();
                 let i = interrupt_nr as isize;
-                let cpu_interrupt = intr_map_base.offset(i).read_volatile();
+                let address = intr_map_base.offset(i);
+                let cpu_interrupt_num = address.read_volatile();
                 // safety: cast is safe because of repr(u32)
-                let cpu_interrupt: CpuInterrupt = core::mem::transmute(cpu_interrupt);
+                let cpu_interrupt: CpuInterrupt =
+                    num_traits::FromPrimitive::from_u32(cpu_interrupt_num).expect("Impossible");
+                // let cpu_interrupt: CpuInterrupt = core::mem::transmute(cpu_interrupt_num);
                 let level = cpu_interrupt.level() as u8 as usize;
+                log::info!("Checking Interrupt {interrupt_nr} at address {address:?} => Cpu Interrupt[{cpu_interrupt_num}]: {cpu_interrupt:?} @ Level{level}");
 
                 levels[level] |= 1 << i;
                 status &= !(1u128 << interrupt_nr);
@@ -355,6 +421,7 @@ mod vectored {
     unsafe fn handle_interrupts(level: u32, save_frame: &mut Context) {
         let cpu_interrupt_mask =
             interrupt::get() & interrupt::get_mask() & CPU_INTERRUPT_LEVELS[level as usize];
+        log::trace!("Handling interrupt level {level}");
 
         if cpu_interrupt_mask & CPU_INTERRUPT_INTERNAL != 0 {
             let cpu_interrupt_mask = cpu_interrupt_mask & CPU_INTERRUPT_INTERNAL;
@@ -363,6 +430,7 @@ mod vectored {
             if (cpu_interrupt_mask & CPU_INTERRUPT_EDGE) != 0 {
                 interrupt::clear(1 << cpu_interrupt_nr);
             }
+            log::info!("Handling CPU internal interrupt {cpu_interrupt_nr}");
             if let Some(handler) = cpu_interrupt_nr_to_cpu_interrupt_handler(cpu_interrupt_nr) {
                 handler(level, save_frame);
             }
@@ -371,6 +439,7 @@ mod vectored {
                 let cpu_interrupt_mask = cpu_interrupt_mask & CPU_INTERRUPT_EDGE;
                 let cpu_interrupt_nr = cpu_interrupt_mask.trailing_zeros();
                 interrupt::clear(1 << cpu_interrupt_nr);
+                log::debug!("Handling CPU edge interrupt {cpu_interrupt_nr}");
 
                 // for edge interrupts cannot rely on the interrupt status
                 // register, therefore call all registered
@@ -391,11 +460,28 @@ mod vectored {
             } else {
                 // finally check periperal sources and fire of handlers from pac
                 // peripheral mapped interrupts are cleared by the peripheral
+                log::info!(
+                    "Before: WIFI_BB {:?}",
+                    get_configured_interrupts(crate::get_core(), 1 << 3)
+                );
+                log::info!(
+                    "Before: USB_DEVICE {:?}",
+                    get_configured_interrupts(crate::get_core(), 1 << 96)
+                );
+                // log::info!(
+                //     "Before: All: {:?}",
+                //     get_configured_interrupts(crate::get_core(), !0)
+                // );
                 let status = get_status(crate::get_core());
                 let interrupt_levels = get_configured_interrupts(crate::get_core(), status);
                 let interrupt_mask = status & interrupt_levels[level as usize];
                 let interrupt_nr = interrupt_mask.trailing_zeros();
 
+                log::debug!("Handling peripheral configured interrupts {interrupt_levels:?}");
+                log::debug!("Handling peripheral interrupts {status:0128b}");
+                log::debug!(
+                    "Handling peripheral interrupts masked for level {interrupt_mask:0128b}"
+                );
                 // Interrupt::try_from can fail if interrupt already de-asserted:
                 // silently ignore
                 if let Ok(interrupt) = peripherals::Interrupt::try_from(interrupt_nr as u16) {
@@ -411,6 +497,7 @@ mod vectored {
             // defined in each hal
             fn EspDefaultHandler(level: u32, interrupt: Interrupt);
         }
+        log::debug!("Handling interrupt: {interrupt:?}");
 
         let handler = peripherals::__INTERRUPTS[interrupt.number() as usize]._handler;
         if handler as *const _ == EspDefaultHandler as *const unsafe extern "C" fn() {
