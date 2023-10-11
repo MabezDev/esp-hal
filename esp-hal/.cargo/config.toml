@@ -2,6 +2,7 @@
 esp32c2 = "run --target riscv32imc-unknown-none-elf --features esp32c2"
 esp32c3 = "run --target riscv32imc-unknown-none-elf --features esp32c3"
 esp32c6 = "run --target riscv32imac-unknown-none-elf --features esp32c6"
+esp32h2 = "run --target riscv32imac-unknown-none-elf --features esp32h2"
 
 [target.riscv32imc-unknown-none-elf]
 runner = "espflash flash --monitor"
