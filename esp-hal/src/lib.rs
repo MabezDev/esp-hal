@@ -571,15 +571,18 @@ unsafe fn post_init() {
         configure_mmu();
     }
 
-    use crate::{peripherals::RTC_CNTL, timer::Wdt};
+    #[cfg(rtc_cntl)]
+    let inner = peripherals::RTC_CNTL::steal();
+    #[cfg(pcr)]
+    let inner = peripherals::LP_CLKRST::steal();
 
     // RTC domain must be enabled before we try to disable
-    let mut rtc = Rtc::new(RTC_CNTL::steal());
+    let mut rtc = Rtc::new(inner);
     rtc.swd.disable();
     rtc.rwdt.disable();
 
     #[cfg(timg0)]
-    Wdt::<crate::peripherals::TIMG0>::set_wdt_enabled(false);
+    crate::timer::Wdt::<crate::peripherals::TIMG0>::set_wdt_enabled(false);
     #[cfg(timg1)]
-    Wdt::<crate::peripherals::TIMG1>::set_wdt_enabled(false);
+    crate::timer::Wdt::<crate::peripherals::TIMG1>::set_wdt_enabled(false);
 }

@@ -1,6 +1,7 @@
 [alias]
-esp32c3 = "run --target riscv32imc-unknown-none-elf --features esp32c3"
 esp32c2 = "run --target riscv32imc-unknown-none-elf --features esp32c2"
+esp32c3 = "run --target riscv32imc-unknown-none-elf --features esp32c3"
+esp32c6 = "run --target riscv32imac-unknown-none-elf --features esp32c6"
 
 [target.riscv32imc-unknown-none-elf]
 runner = "espflash flash --monitor"
@@ -22,6 +23,12 @@ rustflags = [
   "--cfg", 'target_has_atomic="16"',
   "--cfg", 'target_has_atomic="32"',
   "--cfg", 'target_has_atomic="ptr"',
+]
+
+[target.riscv32imac-unknown-none-elf]
+runner = "espflash flash --monitor"
+rustflags = [
+  "-C", "link-arg=-Tlinkall.x",
 ]
 
 [unstable]
