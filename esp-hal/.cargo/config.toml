@@ -1,5 +1,6 @@
 [alias]
 esp32c3 = "run --target riscv32imc-unknown-none-elf --features esp32c3"
+esp32c2 = "run --target riscv32imc-unknown-none-elf --features esp32c2"
 
 [target.riscv32imc-unknown-none-elf]
 runner = "espflash flash --monitor"

@@ -183,27 +183,30 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     copy_dir_all("ld/sections", &out)?;
 
-    #[cfg(feature = "esp32c3")]
+    // TODO clean up and support other chips
+    // TODO support direct boot and mcu boot
+    #[cfg(not(any(feature = "direct-boot", feature = "mcu-boot")))]
     {
-        // TODO clean up and support other chips
-        // TODO support direct boot and mcu boot
-        fs::copy("ld/soc/esp32c3/bl-esp32c3-memory.x", out.join("memory.x"))?;
         fs::copy(
-            "ld/soc/esp32c3/bl-riscv-link.x",
-            out.join("bl-riscv-link.x"),
+            format!("ld/soc/{device_name}/bl-{device_name}-memory.x"),
+            out.join("memory.x"),
         )?;
-        fs::copy("ld/soc/esp32c3/bl-linkall.x", out.join("linkall.x"))?;
         fs::copy(
-            "ld/soc/esp32c3/rom-functions.x",
-            out.join("rom-functions.x"),
+            format!("ld/soc/{device_name}/bl-{device_name}-link.x"),
+            out.join("link.x"),
         )?;
-        // Only re-run the build script when memory.x is changed,
-        // instead of when any part of the source code changes.
-        println!("cargo:rerun-if-changed=ld/soc/esp32c3/memory.x");
-
-        #[cfg(feature = "defmt")]
-        println!("cargo:rustc-link-arg=-Tdefmt.x");
+        fs::copy(
+            format!("ld/soc/{device_name}/bl-linkall.x"),
+            out.join("linkall.x"),
+        )?;
     }
+
+    fs::copy(
+        format!("ld/soc/{device_name}/rom-functions.x"),
+        out.join("rom-functions.x"),
+    )?;
+    #[cfg(feature = "defmt")]
+    println!("cargo:rustc-link-arg=-Tdefmt.x");
 
     // Generate the eFuse table from the selected device's CSV file:
     gen_efuse_table(device_name, out)?;

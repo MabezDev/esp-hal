@@ -70,10 +70,10 @@ serde      = { version = "1.0.188", features = ["derive"] }
 [features]
 default = ["vectored"]
 esp32   = ["xtensa", "esp32/rt",   "procmacros/esp32",   "xtensa-lx/esp32",   "xtensa-lx-rt/esp32"]
-esp32c2 = ["riscv",  "esp32c2/rt", "procmacros/esp32c2"]
+esp32c2 = ["riscv",  "esp32c2/rt", "procmacros/esp32c2", "esp-println/esp32c2", "esp-backtrace/esp32c2"]
 esp32c3 = ["riscv",  "esp32c3/rt", "procmacros/esp32c3", "esp-println/esp32c3", "esp-backtrace/esp32c3"]
-esp32c6 = ["riscv",  "esp32c6/rt", "procmacros/esp32c6"]
-esp32h2 = ["riscv",  "esp32h2/rt", "procmacros/esp32h2"]
+esp32c6 = ["riscv",  "esp32c6/rt", "procmacros/esp32c6", "esp-println/esp32c6", "esp-backtrace/esp32c6"]
+esp32h2 = ["riscv",  "esp32h2/rt", "procmacros/esp32h2", "esp-println/esp32h2", "esp-backtrace/esp32h2"]
 esp32s2 = ["xtensa", "esp32s2/rt", "procmacros/esp32s2", "xtensa-lx/esp32s2", "xtensa-lx-rt/esp32s2", "usb-otg"]
 esp32s3 = ["xtensa", "esp32s3/rt", "procmacros/esp32s3", "xtensa-lx/esp32s3", "xtensa-lx-rt/esp32s3", "usb-otg"]
 

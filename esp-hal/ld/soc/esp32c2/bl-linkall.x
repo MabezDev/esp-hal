@@ -6,6 +6,6 @@ REGION_ALIAS("RODATA", DROM);
 REGION_ALIAS("RWDATA", DRAM);
 REGION_ALIAS("RWTEXT", IRAM);
 
-INCLUDE "bl-riscv-link.x"
+INCLUDE "link.x"
 INCLUDE "hal-defaults.x"
 INCLUDE "rom-functions.x"
