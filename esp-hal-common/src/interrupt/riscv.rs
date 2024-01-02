@@ -37,9 +37,10 @@ pub enum InterruptKind {
 /// It is possible to create a handler for each of the interrupts. (e.g.
 /// `interrupt3`)
 #[repr(u32)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CpuInterrupt {
+    Disabled   = 0,
     Interrupt1 = 1,
     Interrupt2,
     Interrupt3,
@@ -118,6 +119,7 @@ mod vectored {
     #[doc(hidden)]
     pub(crate) unsafe fn init_vectoring() {
         for (prio, num) in PRIORITY_TO_INTERRUPT.iter().enumerate() {
+            enable_cpu_interrupt(core::mem::transmute(*num as u32), false);
             set_kind(
                 crate::get_core(),
                 core::mem::transmute(*num as u32),
@@ -128,7 +130,8 @@ mod vectored {
                 core::mem::transmute(*num as u32),
                 core::mem::transmute((prio as u8) + 1),
             );
-            enable_cpu_interrupt(core::mem::transmute(*num as u32));
+            clear(crate::get_core(), core::mem::transmute(*num as u32));
+            enable_cpu_interrupt(core::mem::transmute(*num as u32), true);
         }
     }
 
@@ -137,17 +140,24 @@ mod vectored {
     fn get_configured_interrupts(_core: Cpu, mut status: u128) -> [u128; 16] {
         unsafe {
             let mut prios = [0u128; 16];
-
+            // info!("get_configured_interrupts:enter");
             while status != 0 {
                 let interrupt_nr = status.trailing_zeros() as u16;
                 // safety: cast is safe because of repr(u16)
                 let cpu_interrupt: CpuInterrupt =
                     get_assigned_cpu_interrupt(core::mem::transmute(interrupt_nr as u16));
-                let prio = get_priority(cpu_interrupt);
-
-                prios[prio as usize] |= 1 << (interrupt_nr as usize);
+                // info!(
+                //     "{:?} is mapped to cpu interrupt: {:?}",
+                //     Interrupt::try_from(interrupt_nr as u8).unwrap(),
+                //     cpu_interrupt
+                // );
+                if cpu_interrupt != CpuInterrupt::Disabled {
+                    let prio = get_priority(cpu_interrupt);
+                    prios[prio as usize] |= 1 << (interrupt_nr as usize);
+                }
                 status &= !(1u128 << interrupt_nr);
             }
+            // info!("get_configured_interrupts:exit");
 
             prios
         }
@@ -173,7 +183,6 @@ mod vectored {
             let cpu_interrupt =
                 core::mem::transmute(PRIORITY_TO_INTERRUPT[(level as usize) - 1] as u32);
             map(crate::get_core(), interrupt, cpu_interrupt);
-            enable_cpu_interrupt(cpu_interrupt);
         }
         Ok(())
     }
@@ -198,22 +207,46 @@ mod vectored {
         unsafe {
             map(crate::get_core(), interrupt, cpu_interrupt);
             set_priority(crate::get_core(), cpu_interrupt, level);
-            enable_cpu_interrupt(cpu_interrupt);
+            enable_cpu_interrupt(cpu_interrupt, true);
         }
         Ok(())
     }
 
     #[ram]
     unsafe fn handle_interrupts(cpu_intr: CpuInterrupt, context: &mut TrapFrame) {
+        let interrupt_core0 = unsafe { &*peripherals::INTERRUPT_CORE0::PTR };
+        let bb = interrupt_core0.bb_int_map().read().bits();
+        // info!("BB mapping: {}", bb);
+
         let status = get_status(crate::get_core());
+        assert_ne!(cpu_intr as usize, 0);
+        // info!("status[{}]: {}", cpu_intr as u32, status);
 
         // this has no effect on level interrupts, but the interrupt may be an edge one
         // so we clear it anyway
         clear(crate::get_core(), cpu_intr);
 
+        // WHY is get configured always saying that 4 is enabled on level one?
+        // is this an off by one error, we enable WIFI_MAC/WIFI_PWR which could be 3 or
+        // 4?
         let configured_interrupts = get_configured_interrupts(crate::get_core(), status);
+        // info!("configured: {:#?}", configured_interrupts);
         let mut interrupt_mask =
             status & configured_interrupts[INTERRUPT_TO_PRIORITY[cpu_intr as usize - 1]];
+
+        // if interrupt_mask == 0 {
+        //     info!("Error, interrupt_mask is zero?? how?? -> CPU: {:?}, Status: {},
+        // Configured for this level: {}", cpu_intr, status,
+        // configured_interrupts[INTERRUPT_TO_PRIORITY[cpu_intr as usize]])
+        // } else {
+        //     info!(
+        //         "Interrupt status: {}, configured: {}, mask: {}",
+        //         status,
+        //         interrupt_mask,
+        //         configured_interrupts[INTERRUPT_TO_PRIORITY[cpu_intr as usize - 1]]
+        //     );
+        // }
+
         while interrupt_mask != 0 {
             let interrupt_nr = interrupt_mask.trailing_zeros();
             // Interrupt::try_from can fail if interrupt already de-asserted:
@@ -544,6 +577,7 @@ pub fn get_status(_core: Cpu) -> u128 {
 pub unsafe fn map(_core: Cpu, interrupt: Interrupt, which: CpuInterrupt) {
     let interrupt_number = interrupt as isize;
     let cpu_interrupt_number = which as isize;
+    assert_ne!(cpu_interrupt_number, 0);
     let intr_map_base = crate::soc::registers::INTERRUPT_MAP_BASE as *mut u32;
     intr_map_base
         .offset(interrupt_number)
@@ -557,7 +591,6 @@ unsafe fn get_assigned_cpu_interrupt(interrupt: Interrupt) -> CpuInterrupt {
     let intr_map_base = crate::soc::registers::INTERRUPT_MAP_BASE as *mut u32;
 
     let cpu_intr = intr_map_base.offset(interrupt_number).read_volatile();
-
     core::mem::transmute(cpu_intr)
 }
 
@@ -572,12 +605,12 @@ mod classic {
     pub(super) const INTERRUPT_TO_PRIORITY: [usize; 15] =
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
-    /// Enable a CPU interrupt
-    pub unsafe fn enable_cpu_interrupt(which: CpuInterrupt) {
+    /// Enable/Disable a CPU interrupt
+    pub unsafe fn enable_cpu_interrupt(which: CpuInterrupt, enabled: bool) {
         let cpu_interrupt_number = which as isize;
         let intr = &*crate::peripherals::INTERRUPT_CORE0::PTR;
         intr.cpu_int_enable()
-            .modify(|r, w| w.bits((1 << cpu_interrupt_number) | r.bits()));
+            .modify(|r, w| w.bits(((enabled as u32) << cpu_interrupt_number) | r.bits()));
     }
 
     /// Set the interrupt kind (i.e. level or edge) of an CPU interrupt
