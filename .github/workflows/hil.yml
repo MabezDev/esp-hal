@@ -120,15 +120,20 @@ jobs:
         with:
           name: tests-${{ matrix.target.soc }}
           path: tests-${{ matrix.target.soc }}
-
+      - name: Check
+        run: ls /dev/serial_ports/
       - name: Run Tests
         id: run-tests
+        env:
+          ESPFLASH_PORT: /dev/serial_ports/${{ matrix.target.soc }}
         run: |
           export PATH=$PATH:/home/espressif/.cargo/bin
           cargo xtask run-elfs ${{ matrix.target.soc }} tests-${{ matrix.target.soc }}
 
       - name: Erase Flash on Failure
         if: ${{ failure() && steps.run-tests.conclusion == 'failure' }}
+        env:
+          ESPFLASH_PORT: /dev/serial_ports/${{ matrix.target.soc }}
         run: |
           export PATH=$PATH:/home/espressif/.cargo/bin
           espflash erase-flash
