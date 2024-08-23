@@ -725,16 +725,16 @@ pub struct Target;
 pub struct Periodic;
 
 /// A single alarm.
-pub struct Alarm<'d, MODE, DM, COMP = AnyComparator<'d>, UNIT = AnyUnit<'d>>
+pub struct Alarm<'d, MODE, DM>
 where
     DM: Mode,
 {
-    comparator: COMP,
-    unit: &'d UNIT,
+    comparator: AnyComparator<'d>,
+    unit: &'d AnyUnit<'d>,
     _pd: PhantomData<(MODE, DM)>,
 }
 
-impl<'d, T, DM, COMP: Comparator, UNIT: Unit> Debug for Alarm<'d, T, DM, COMP, UNIT>
+impl<'d, T, DM> Debug for Alarm<'d, T, DM>
 where
     DM: Mode,
 {
@@ -746,9 +746,9 @@ where
     }
 }
 
-impl<'d, T, COMP: Comparator, UNIT: Unit> Alarm<'d, T, Blocking, COMP, UNIT> {
+impl<'d, T> Alarm<'d, T, Blocking> {
     /// Creates a new alarm from a comparator and unit, in blocking mode.
-    pub fn new(comparator: COMP, unit: &FrozenUnit<'d, UNIT>) -> Self {
+    pub fn new(comparator: AnyComparator<'d>, unit: &FrozenUnit<'d, AnyUnit<'d>>) -> Self {
         Self {
             comparator,
             unit: unit.borrow(),
@@ -757,9 +757,9 @@ impl<'d, T, COMP: Comparator, UNIT: Unit> Alarm<'d, T, Blocking, COMP, UNIT> {
     }
 }
 
-impl<'d, T, COMP: Comparator, UNIT: Unit> Alarm<'d, T, Async, COMP, UNIT> {
+impl<'d, T> Alarm<'d, T, Async> {
     /// Creates a new alarm from a comparator and unit, in async mode.
-    pub fn new_async(comparator: COMP, unit: &FrozenUnit<'d, UNIT>) -> Self {
+    pub fn new_async(comparator: AnyComparator<'d>, unit: &FrozenUnit<'d, AnyUnit<'d>>) -> Self {
         Self {
             comparator,
             unit: unit.0,
@@ -768,15 +768,15 @@ impl<'d, T, COMP: Comparator, UNIT: Unit> Alarm<'d, T, Async, COMP, UNIT> {
     }
 }
 
-impl<'d, T, COMP: Comparator, UNIT: Unit> InterruptConfigurable
-    for Alarm<'d, T, Blocking, COMP, UNIT>
+impl<'d, T> InterruptConfigurable
+    for Alarm<'d, T, Blocking>
 {
     fn set_interrupt_handler(&mut self, handler: InterruptHandler) {
         self.comparator.set_interrupt_handler(handler)
     }
 }
 
-impl<'d, DM, COMP: Comparator, UNIT: Unit> Alarm<'d, Target, DM, COMP, UNIT>
+impl<'d, DM> Alarm<'d, Target, DM>
 where
     DM: Mode,
 {
@@ -808,7 +808,7 @@ where
     }
 
     /// Converts this [Alarm] into [Periodic] mode
-    pub fn into_periodic(self) -> Alarm<'d, Periodic, DM, COMP, UNIT> {
+    pub fn into_periodic(self) -> Alarm<'d, Periodic, DM> {
         Alarm {
             comparator: self.comparator,
             unit: self.unit,
@@ -817,7 +817,7 @@ where
     }
 }
 
-impl<'d, DM, COMP: Comparator, UNIT: Unit> Alarm<'d, Periodic, DM, COMP, UNIT>
+impl<'d, DM> Alarm<'d, Periodic, DM>
 where
     DM: Mode,
 {
@@ -839,7 +839,7 @@ where
     }
 
     /// Converts this [Alarm] into [Target] mode
-    pub fn into_target(self) -> Alarm<'d, Target, DM, COMP, UNIT> {
+    pub fn into_target(self) -> Alarm<'d, Target, DM> {
         Alarm {
             comparator: self.comparator,
             unit: self.unit,
@@ -848,14 +848,14 @@ where
     }
 }
 
-impl<'d, T, DM, COMP: Comparator, UNIT: Unit> crate::private::Sealed
-    for Alarm<'d, T, DM, COMP, UNIT>
+impl<'d, T, DM> crate::private::Sealed
+    for Alarm<'d, T, DM>
 where
     DM: Mode,
 {
 }
 
-impl<'d, T, DM, COMP: Comparator, UNIT: Unit> super::Timer for Alarm<'d, T, DM, COMP, UNIT>
+impl<'d, T, DM> super::Timer for Alarm<'d, T, DM>
 where
     DM: Mode,
 {
@@ -991,7 +991,7 @@ where
     }
 }
 
-impl<'d, T, DM, COMP: Comparator, UNIT: Unit> Peripheral for Alarm<'d, T, DM, COMP, UNIT>
+impl<'d, T, DM> Peripheral for Alarm<'d, T, DM>
 where
     DM: Mode,
 {
@@ -1022,12 +1022,12 @@ mod asynch {
     const INIT: AtomicWaker = AtomicWaker::new();
     static WAKERS: [AtomicWaker; NUM_ALARMS] = [INIT; NUM_ALARMS];
 
-    pub(crate) struct AlarmFuture<'a, COMP: Comparator, UNIT: Unit> {
-        alarm: &'a Alarm<'a, Periodic, crate::Async, COMP, UNIT>,
+    pub(crate) struct AlarmFuture<'a> {
+        alarm: &'a Alarm<'a, Periodic, crate::Async>,
     }
 
-    impl<'a, COMP: Comparator, UNIT: Unit> AlarmFuture<'a, COMP, UNIT> {
-        pub(crate) fn new(alarm: &'a Alarm<'a, Periodic, crate::Async, COMP, UNIT>) -> Self {
+    impl<'a> AlarmFuture<'a> {
+        pub(crate) fn new(alarm: &'a Alarm<'a, Periodic, crate::Async>) -> Self {
             alarm.clear_interrupt();
 
             let (interrupt, handler) = match alarm.comparator.channel() {
@@ -1055,7 +1055,7 @@ mod asynch {
         }
     }
 
-    impl<'a, COMP: Comparator, UNIT: Unit> core::future::Future for AlarmFuture<'a, COMP, UNIT> {
+    impl<'a> core::future::Future for AlarmFuture<'a> {
         type Output = ();
 
         fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -1069,8 +1069,8 @@ mod asynch {
         }
     }
 
-    impl<'d, COMP: Comparator, UNIT: Unit> embedded_hal_async::delay::DelayNs
-        for Alarm<'d, Periodic, crate::Async, COMP, UNIT>
+    impl<'d> embedded_hal_async::delay::DelayNs
+        for Alarm<'d, Periodic, crate::Async>
     {
         async fn delay_ns(&mut self, ns: u32) {
             let period = MicrosDurationU32::from_ticks(ns / 1000);
@@ -1145,32 +1145,32 @@ pub mod etm {
     use super::*;
 
     /// An ETM controlled SYSTIMER event
-    pub struct SysTimerEtmEvent<'a, 'd, M, DM: crate::Mode, COMP, UNIT> {
-        alarm: &'a mut Alarm<'d, M, DM, COMP, UNIT>,
+    pub struct SysTimerEtmEvent<'a, 'd, M, DM: crate::Mode> {
+        alarm: &'a mut Alarm<'d, M, DM>,
     }
 
-    impl<'a, 'd, M, DM: crate::Mode, COMP: Comparator, UNIT: Unit>
-        SysTimerEtmEvent<'a, 'd, M, DM, COMP, UNIT>
+    impl<'a, 'd, M, DM: crate::Mode>
+        SysTimerEtmEvent<'a, 'd, M, DM>
     {
         /// Creates an ETM event from the given [Alarm]
-        pub fn new(alarm: &'a mut Alarm<'d, M, DM, COMP, UNIT>) -> Self {
+        pub fn new(alarm: &'a mut Alarm<'d, M, DM>) -> Self {
             Self { alarm }
         }
 
         /// Execute closure f with mutable access to the wrapped [Alarm].
-        pub fn with<R>(&self, f: impl FnOnce(&&'a mut Alarm<'d, M, DM, COMP, UNIT>) -> R) -> R {
+        pub fn with<R>(&self, f: impl FnOnce(&&'a mut Alarm<'d, M, DM>) -> R) -> R {
             let alarm = &self.alarm;
             f(alarm)
         }
     }
 
-    impl<'a, 'd, M, DM: crate::Mode, COMP: Comparator, UNIT: Unit> crate::private::Sealed
-        for SysTimerEtmEvent<'a, 'd, M, DM, COMP, UNIT>
+    impl<'a, 'd, M, DM: crate::Mode> crate::private::Sealed
+        for SysTimerEtmEvent<'a, 'd, M, DM>
     {
     }
 
-    impl<'a, 'd, M, DM: crate::Mode, COMP: Comparator, UNIT: Unit> crate::etm::EtmEvent
-        for SysTimerEtmEvent<'a, 'd, M, DM, COMP, UNIT>
+    impl<'a, 'd, M, DM: crate::Mode> crate::etm::EtmEvent
+        for SysTimerEtmEvent<'a, 'd, M, DM>
     {
         fn id(&self) -> u8 {
             50 + self.alarm.comparator.channel()

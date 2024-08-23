@@ -18,13 +18,7 @@ use esp_hal::{
     prelude::*,
     system::SystemControl,
     timer::systimer::{
-        Alarm,
-        FrozenUnit,
-        Periodic,
-        SpecificComparator,
-        SpecificUnit,
-        SystemTimer,
-        Target,
+        Alarm, FrozenUnit, Periodic, AnyUnit, SystemTimer, Target,
     },
     Blocking,
 };
@@ -32,21 +26,9 @@ use esp_println::println;
 use fugit::ExtU32;
 use static_cell::StaticCell;
 
-static ALARM0: Mutex<
-    RefCell<
-        Option<Alarm<Periodic, Blocking, SpecificComparator<'static, 0>, SpecificUnit<'static, 0>>>,
-    >,
-> = Mutex::new(RefCell::new(None));
-static ALARM1: Mutex<
-    RefCell<
-        Option<Alarm<Target, Blocking, SpecificComparator<'static, 1>, SpecificUnit<'static, 0>>>,
-    >,
-> = Mutex::new(RefCell::new(None));
-static ALARM2: Mutex<
-    RefCell<
-        Option<Alarm<Target, Blocking, SpecificComparator<'static, 2>, SpecificUnit<'static, 0>>>,
-    >,
-> = Mutex::new(RefCell::new(None));
+static ALARM0: Mutex<RefCell<Option<Alarm<Periodic, Blocking>>>> = Mutex::new(RefCell::new(None));
+static ALARM1: Mutex<RefCell<Option<Alarm<Target, Blocking>>>> = Mutex::new(RefCell::new(None));
+static ALARM2: Mutex<RefCell<Option<Alarm<Target, Blocking>>>> = Mutex::new(RefCell::new(None));
 
 #[entry]
 fn main() -> ! {
@@ -57,15 +39,15 @@ fn main() -> ! {
     let systimer = SystemTimer::new(peripherals.SYSTIMER);
     println!("SYSTIMER Current value = {}", SystemTimer::now());
 
-    static UNIT0: StaticCell<SpecificUnit<'static, 0>> = StaticCell::new();
+    static UNIT0: StaticCell<AnyUnit<'static>> = StaticCell::new();
 
-    let unit0 = UNIT0.init(systimer.unit0);
+    let unit0 = UNIT0.init(systimer.unit0.into());
 
     let frozen_unit = FrozenUnit::new(unit0);
 
-    let alarm0 = Alarm::new(systimer.comparator0, &frozen_unit);
-    let alarm1 = Alarm::new(systimer.comparator1, &frozen_unit);
-    let alarm2 = Alarm::new(systimer.comparator2, &frozen_unit);
+    let alarm0 = Alarm::new(systimer.comparator0.into(), &frozen_unit);
+    let alarm1 = Alarm::new(systimer.comparator1.into(), &frozen_unit);
+    let alarm2 = Alarm::new(systimer.comparator2.into(), &frozen_unit);
 
     critical_section::with(|cs| {
         let alarm0 = alarm0.into_periodic();
