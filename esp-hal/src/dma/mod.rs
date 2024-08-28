@@ -58,6 +58,8 @@ use core::{
     sync::atomic::compiler_fence,
 };
 
+pub(crate) use gdma::ErasedDma;
+
 trait Word: crate::private::Sealed {}
 
 macro_rules! impl_word {

@@ -980,7 +980,7 @@ mod dma {
         pub fn with_dma<C, DmaMode>(
             self,
             mut channel: Channel<'d, C, DmaMode>,
-        ) -> SpiDma<'d, crate::peripherals::SPI2, C, M, DmaMode>
+        ) -> SpiDma<'d, crate::peripherals::SPI2, M, DmaMode>
         where
             C: DmaChannel,
             C::P: SpiPeripheral + Spi2Peripheral,
@@ -990,7 +990,7 @@ mod dma {
 
             SpiDma {
                 spi: self.spi,
-                channel,
+                channel: channel.into(),
                 _mode: PhantomData,
             }
         }
@@ -1009,7 +1009,7 @@ mod dma {
         pub fn with_dma<C, DmaMode>(
             self,
             mut channel: Channel<'d, C, DmaMode>,
-        ) -> SpiDma<'d, crate::peripherals::SPI3, C, M, DmaMode>
+        ) -> SpiDma<'d, crate::peripherals::SPI3, M, DmaMode>
         where
             C: DmaChannel,
             C::P: SpiPeripheral + Spi3Peripheral,
@@ -1019,7 +1019,7 @@ mod dma {
 
             SpiDma {
                 spi: self.spi,
-                channel,
+                channel: channel.into(),
                 _mode: PhantomData,
             }
         }
@@ -1032,22 +1032,18 @@ mod dma {
     /// [`SpiDmaBus`] via `with_buffers` to get access
     /// to a DMA capable SPI bus that implements the
     /// embedded-hal traits.
-    pub struct SpiDma<'d, T, C, D, M>
+    pub struct SpiDma<'d, T, D, M>
     where
-        C: DmaChannel,
-        C::P: SpiPeripheral,
         D: DuplexMode,
         M: Mode,
     {
         pub(crate) spi: PeripheralRef<'d, T>,
-        pub(crate) channel: Channel<'d, C, M>,
+        pub(crate) channel: Channel<'d, crate::dma::ErasedDma, M>,
         _mode: PhantomData<D>,
     }
 
-    impl<'d, T, C, D, M> core::fmt::Debug for SpiDma<'d, T, C, D, M>
+    impl<'d, T, D, M> core::fmt::Debug for SpiDma<'d, T, D, M>
     where
-        C: DmaChannel,
-        C::P: SpiPeripheral,
         D: DuplexMode,
         M: Mode,
     {
@@ -1060,11 +1056,9 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, D, M> SpiDma<'d, T, C, D, M>
+    impl<'d, T, D, M> SpiDma<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
         D: DuplexMode,
         M: Mode,
     {
@@ -1100,21 +1094,18 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, D, M> crate::private::Sealed for SpiDma<'d, T, C, D, M>
+    impl<'d, T, D, M> crate::private::Sealed for SpiDma<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
         D: DuplexMode,
         M: Mode,
     {
     }
 
-    impl<'d, T, C, D, M> InterruptConfigurable for SpiDma<'d, T, C, D, M>
+    impl<'d, T, D, M> InterruptConfigurable for SpiDma<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
@@ -1124,11 +1115,10 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, D, M> SpiDma<'d, T, C, D, M>
+    impl<'d, T, D, M> SpiDma<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
@@ -1138,11 +1128,10 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, D, M> SpiDma<'d, T, C, D, M>
+    impl<'d, T, D, M> SpiDma<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
@@ -1155,7 +1144,7 @@ mod dma {
             self,
             dma_tx_buf: DmaTxBuf,
             dma_rx_buf: DmaRxBuf,
-        ) -> SpiDmaBus<'d, T, C, D, M> {
+        ) -> SpiDmaBus<'d, T, D, M> {
             SpiDmaBus::new(self, dma_tx_buf, dma_rx_buf)
         }
     }
@@ -1164,14 +1153,13 @@ mod dma {
     ///
     /// This structure holds references to the SPI instance, DMA buffers, and
     /// transfer status.
-    pub struct SpiDmaTransfer<'d, T, C, D, M, Buf>
+    pub struct SpiDmaTransfer<'d, T, D, M, Buf>
     where
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
-        spi_dma: SpiDma<'d, T, C, D, M>,
+        spi_dma: SpiDma<'d, T, D, M>,
         dma_buf: Buf,
         is_rx: bool,
         is_tx: bool,
@@ -1180,15 +1168,14 @@ mod dma {
         tx_future_awaited: bool,
     }
 
-    impl<'d, T, C, D, M, Buf> SpiDmaTransfer<'d, T, C, D, M, Buf>
+    impl<'d, T, D, M, Buf> SpiDmaTransfer<'d, T, D, M, Buf>
     where
         T: Instance,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
-        fn new(spi_dma: SpiDma<'d, T, C, D, M>, dma_buf: Buf, is_rx: bool, is_tx: bool) -> Self {
+        fn new(spi_dma: SpiDma<'d, T, D, M>, dma_buf: Buf, is_rx: bool, is_tx: bool) -> Self {
             Self {
                 spi_dma,
                 dma_buf,
@@ -1231,7 +1218,7 @@ mod dma {
         ///
         /// This method blocks until the transfer is finished and returns the
         /// `SpiDma` instance and the associated buffer.
-        pub fn wait(mut self) -> (SpiDma<'d, T, C, D, M>, Buf) {
+        pub fn wait(mut self) -> (SpiDma<'d, T, D, M>, Buf) {
             self.spi_dma.spi.flush().ok();
             fence(Ordering::Acquire);
             (self.spi_dma, self.dma_buf)
@@ -1239,11 +1226,10 @@ mod dma {
     }
 
     #[cfg(feature = "async")]
-    impl<'d, T, C, D, Buf> SpiDmaTransfer<'d, T, C, D, crate::Async, Buf>
+    impl<'d, T, D, Buf> SpiDmaTransfer<'d, T, D, crate::Async, Buf>
     where
         T: Instance,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
     {
         /// Waits for the DMA transfer to complete asynchronously.
@@ -1264,11 +1250,10 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, M> SpiDma<'d, T, C, FullDuplexMode, M>
+    impl<'d, T, M> SpiDma<'d, T, FullDuplexMode, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         M: Mode,
     {
         /// Perform a DMA write.
@@ -1281,7 +1266,7 @@ mod dma {
         pub fn dma_write(
             mut self,
             buffer: DmaTxBuf,
-        ) -> Result<SpiDmaTransfer<'d, T, C, FullDuplexMode, M, DmaTxBuf>, (Error, Self, DmaTxBuf)>
+        ) -> Result<SpiDmaTransfer<'d, T, FullDuplexMode, M, DmaTxBuf>, (Error, Self, DmaTxBuf)>
         {
             let bytes_to_write = buffer.len();
             if bytes_to_write > MAX_DMA_SIZE {
@@ -1313,7 +1298,7 @@ mod dma {
         pub fn dma_read(
             mut self,
             buffer: DmaRxBuf,
-        ) -> Result<SpiDmaTransfer<'d, T, C, FullDuplexMode, M, DmaRxBuf>, (Error, Self, DmaRxBuf)>
+        ) -> Result<SpiDmaTransfer<'d, T, FullDuplexMode, M, DmaRxBuf>, (Error, Self, DmaRxBuf)>
         {
             let bytes_to_read = buffer.len();
             if bytes_to_read > MAX_DMA_SIZE {
@@ -1346,7 +1331,7 @@ mod dma {
             tx_buffer: DmaTxBuf,
             rx_buffer: DmaRxBuf,
         ) -> Result<
-            SpiDmaTransfer<'d, T, C, FullDuplexMode, M, (DmaTxBuf, DmaRxBuf)>,
+            SpiDmaTransfer<'d, T, FullDuplexMode, M, (DmaTxBuf, DmaRxBuf)>,
             (Error, Self, DmaTxBuf, DmaRxBuf),
         > {
             let bytes_to_write = tx_buffer.len();
@@ -1384,11 +1369,10 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, M> SpiDma<'d, T, C, HalfDuplexMode, M>
+    impl<'d, T, M> SpiDma<'d, T, HalfDuplexMode, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         M: Mode,
     {
         /// Perform a half-duplex read operation using DMA.
@@ -1401,7 +1385,7 @@ mod dma {
             address: Address,
             dummy: u8,
             buffer: DmaRxBuf,
-        ) -> Result<SpiDmaTransfer<'d, T, C, HalfDuplexMode, M, DmaRxBuf>, (Error, Self, DmaRxBuf)>
+        ) -> Result<SpiDmaTransfer<'d, T, HalfDuplexMode, M, DmaRxBuf>, (Error, Self, DmaRxBuf)>
         {
             let bytes_to_read = buffer.len();
             if bytes_to_read > MAX_DMA_SIZE {
@@ -1483,7 +1467,7 @@ mod dma {
             address: Address,
             dummy: u8,
             buffer: DmaTxBuf,
-        ) -> Result<SpiDmaTransfer<'d, T, C, HalfDuplexMode, M, DmaTxBuf>, (Error, Self, DmaTxBuf)>
+        ) -> Result<SpiDmaTransfer<'d, T, HalfDuplexMode, M, DmaTxBuf>, (Error, Self, DmaTxBuf)>
         {
             let bytes_to_write = buffer.len();
             if bytes_to_write > MAX_DMA_SIZE {
@@ -1557,18 +1541,17 @@ mod dma {
     }
 
     #[derive(Default)]
-    enum State<'d, T, C, D, M>
+    enum State<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
-        Idle(SpiDma<'d, T, C, D, M>, DmaTxBuf, DmaRxBuf),
-        Reading(SpiDmaTransfer<'d, T, C, D, M, DmaRxBuf>, DmaTxBuf),
-        Writing(SpiDmaTransfer<'d, T, C, D, M, DmaTxBuf>, DmaRxBuf),
-        Transferring(SpiDmaTransfer<'d, T, C, D, M, (DmaTxBuf, DmaRxBuf)>),
+        Idle(SpiDma<'d, T, D, M>, DmaTxBuf, DmaRxBuf),
+        Reading(SpiDmaTransfer<'d, T, D, M, DmaRxBuf>, DmaTxBuf),
+        Writing(SpiDmaTransfer<'d, T, D, M, DmaTxBuf>, DmaRxBuf),
+        Transferring(SpiDmaTransfer<'d, T, D, M, (DmaTxBuf, DmaRxBuf)>),
         #[default]
         TemporarilyRemoved,
     }
@@ -1577,29 +1560,27 @@ mod dma {
     ///
     /// This structure is responsible for managing SPI transfers using DMA
     /// buffers.
-    pub struct SpiDmaBus<'d, T, C, D, M>
+    pub struct SpiDmaBus<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
-        state: State<'d, T, C, D, M>,
+        state: State<'d, T, D, M>,
     }
 
-    impl<'d, T, C, D, M> SpiDmaBus<'d, T, C, D, M>
+    impl<'d, T, D, M> SpiDmaBus<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
         /// Creates a new `SpiDmaBus` with the specified SPI instance and DMA
         /// buffers.
         pub fn new(
-            spi: SpiDma<'d, T, C, D, M>,
+            spi: SpiDma<'d, T, D, M>,
             dma_tx_buf: DmaTxBuf,
             dma_rx_buf: DmaRxBuf,
         ) -> Self {
@@ -1639,7 +1620,7 @@ mod dma {
             let (mut spi_dma, tx_buf, rx_buf) = self.wait_for_idle();
             let interrupts = spi_dma.interrupts();
             self.state = State::Idle(spi_dma, tx_buf, rx_buf);
-
+            
             interrupts
         }
 
@@ -1658,7 +1639,7 @@ mod dma {
             self.state = State::Idle(spi_dma, tx_buf, rx_buf);
         }
 
-        fn wait_for_idle(&mut self) -> (SpiDma<'d, T, C, D, M>, DmaTxBuf, DmaRxBuf) {
+        fn wait_for_idle(&mut self) -> (SpiDma<'d, T, D, M>, DmaTxBuf, DmaRxBuf) {
             match core::mem::take(&mut self.state) {
                 State::Idle(spi, tx_buf, rx_buf) => (spi, tx_buf, rx_buf),
                 State::Reading(transfer, tx_buf) => {
@@ -1678,11 +1659,10 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, D, M> InterruptConfigurable for SpiDmaBus<'d, T, C, D, M>
+    impl<'d, T, D, M> InterruptConfigurable for SpiDmaBus<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
@@ -1694,21 +1674,19 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, D, M> crate::private::Sealed for SpiDmaBus<'d, T, C, D, M>
+    impl<'d, T, D, M> crate::private::Sealed for SpiDmaBus<'d, T, D, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         D: DuplexMode,
         M: Mode,
     {
     }
 
-    impl<'d, T, C, M> SpiDmaBus<'d, T, C, FullDuplexMode, M>
+    impl<'d, T, M> SpiDmaBus<'d, T, FullDuplexMode, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         M: Mode,
     {
         /// Reads data from the SPI bus using DMA.
@@ -1827,11 +1805,10 @@ mod dma {
         }
     }
 
-    impl<'d, T, C, M> HalfDuplexReadWrite for SpiDmaBus<'d, T, C, HalfDuplexMode, M>
+    impl<'d, T, M> HalfDuplexReadWrite for SpiDmaBus<'d, T, HalfDuplexMode, M>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
         M: Mode,
     {
         type Error = super::Error;
@@ -1901,12 +1878,11 @@ mod dma {
     }
 
     #[cfg(feature = "embedded-hal-02")]
-    impl<'d, T, C> embedded_hal_02::blocking::spi::Transfer<u8>
-        for SpiDmaBus<'d, T, C, FullDuplexMode, crate::Blocking>
+    impl<'d, T> embedded_hal_02::blocking::spi::Transfer<u8>
+        for SpiDmaBus<'d, T, FullDuplexMode, crate::Blocking>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
     {
         type Error = super::Error;
 
@@ -1917,12 +1893,11 @@ mod dma {
     }
 
     #[cfg(feature = "embedded-hal-02")]
-    impl<'d, T, C> embedded_hal_02::blocking::spi::Write<u8>
-        for SpiDmaBus<'d, T, C, FullDuplexMode, crate::Blocking>
+    impl<'d, T> embedded_hal_02::blocking::spi::Write<u8>
+        for SpiDmaBus<'d, T, FullDuplexMode, crate::Blocking>
     where
         T: InstanceDma,
-        C: DmaChannel,
-        C::P: SpiPeripheral,
+        
     {
         type Error = super::Error;
 
@@ -1939,16 +1914,15 @@ mod dma {
 
         use super::*;
 
-        impl<'d, T, C> SpiDmaBus<'d, T, C, FullDuplexMode, crate::Async>
+        impl<'d, T> SpiDmaBus<'d, T, FullDuplexMode, crate::Async>
         where
             T: InstanceDma,
-            C: DmaChannel,
-            C::P: SpiPeripheral,
+            
         {
             async fn wait_for_idle_async(
                 &mut self,
             ) -> (
-                SpiDma<'d, T, C, FullDuplexMode, crate::Async>,
+                SpiDma<'d, T, FullDuplexMode, crate::Async>,
                 DmaTxBuf,
                 DmaRxBuf,
             ) {
@@ -2136,11 +2110,10 @@ mod dma {
             }
         }
 
-        impl<'d, T, C> embedded_hal_async::spi::SpiBus for SpiDmaBus<'d, T, C, FullDuplexMode, crate::Async>
+        impl<'d, T> embedded_hal_async::spi::SpiBus for SpiDmaBus<'d, T, FullDuplexMode, crate::Async>
         where
             T: InstanceDma,
-            C: DmaChannel,
-            C::P: SpiPeripheral,
+            
         {
             async fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
                 self.read_async(words).await
@@ -2170,21 +2143,19 @@ mod dma {
 
         use super::*;
 
-        impl<'d, T, C, M> ErrorType for SpiDmaBus<'d, T, C, FullDuplexMode, M>
+        impl<'d, T, M> ErrorType for SpiDmaBus<'d, T, FullDuplexMode, M>
         where
             T: InstanceDma,
-            C: DmaChannel,
-            C::P: SpiPeripheral,
+            
             M: Mode,
         {
             type Error = Error;
         }
 
-        impl<'d, T, C, M> SpiBus for SpiDmaBus<'d, T, C, FullDuplexMode, M>
+        impl<'d, T, M> SpiBus for SpiDmaBus<'d, T, FullDuplexMode, M>
         where
             T: InstanceDma,
-            C: DmaChannel,
-            C::P: SpiPeripheral,
+            
             M: Mode,
         {
             fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {

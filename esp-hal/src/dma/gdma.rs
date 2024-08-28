@@ -515,6 +515,12 @@ macro_rules! impl_channel {
                 type P = SuitablePeripheral<$num>;
             }
 
+            impl From<[<DmaChannel $num>]> for ErasedDma {
+                fn from(inner: [<DmaChannel $num>]) -> Self {
+                    [<DmaChannel $num>]::[<DmaChannel $num>](inner)
+                }
+            }
+
             impl ChannelCreator<$num> {
                 /// Configure the channel for use with blocking APIs
                 ///
@@ -585,6 +591,18 @@ cfg_if::cfg_if! {
         impl_channel!(3, super::asynch::interrupt::interrupt_handler_ch3, DMA_IN_CH3, DMA_OUT_CH3);
         impl_channel!(4, super::asynch::interrupt::interrupt_handler_ch4, DMA_IN_CH4, DMA_OUT_CH4);
   }
+}
+
+pub(crate) enum ErasedDma {
+    DmaChannel0(DmaChannel0),
+    #[cfg(any(esp32c6, esp32h2, esp32c3))]
+    DmaChannel1(DmaChannel1),
+    #[cfg(any(esp32c6, esp32h2, esp32c3))]
+    DmaChannel2(DmaChannel2),
+    #[cfg(esp32s3)]
+    DmaChannel3(DmaChannel3),
+    #[cfg(esp32s3)]
+    DmaChannel4(DmaChannel4),
 }
 
 /// GDMA Peripheral
