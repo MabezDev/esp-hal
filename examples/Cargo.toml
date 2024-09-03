@@ -35,7 +35,7 @@ esp-hal             = { path = "../esp-hal", features = ["log"] }
 esp-hal-embassy     = { path = "../esp-hal-embassy", optional = true }
 esp-hal-smartled    = { path = "../esp-hal-smartled", optional = true }
 esp-ieee802154      = { path = "../esp-ieee802154", optional = true }
-esp-println         = { path = "../esp-println", features = ["log"] }
+esp-println         = { path = "../esp-println", default-features = false, features = ["log", "auto"] }
 esp-storage         = { path = "../esp-storage", optional = true }
 esp-wifi            = { path = "../esp-wifi", optional = true }
 fugit               = "0.3.7"
@@ -84,8 +84,9 @@ psram-2m  = ["esp-hal/psram-2m"]
 [profile.release]
 codegen-units    = 1
 debug            = 2
-debug-assertions = false
+debug-assertions = true
 incremental      = false
-opt-level        = 3
-lto = 'fat'
-overflow-checks  = false
+opt-level        = 0
+# lto = 'fat'
+lto = 'off'
+overflow-checks  = true

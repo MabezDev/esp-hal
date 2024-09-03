@@ -27,36 +27,42 @@ use esp_hal::{
 
 #[entry]
 fn main() -> ! {
-    let peripherals = Peripherals::take();
-    let system = SystemControl::new(peripherals.SYSTEM);
-    let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
+    let a1 = core::sync::atomic::AtomicUsize::new(0);
+    a1.store(1, core::sync::atomic::Ordering::Release);
+    log::info!("{}", a1.load(core::sync::atomic::Ordering::Acquire));
 
-    let delay = Delay::new(&clocks);
+    loop {}
 
-    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
+    // let peripherals = Peripherals::take();
+    // let system = SystemControl::new(peripherals.SYSTEM);
+    // let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
-    // Default pins for Uart/Serial communication
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "esp32")] {
-            let (mut tx_pin, mut rx_pin) = (io.pins.gpio1, io.pins.gpio3);
-        } else if #[cfg(feature = "esp32c2")] {
-            let (mut tx_pin, mut rx_pin) = (io.pins.gpio20, io.pins.gpio19);
-        } else if #[cfg(feature = "esp32c3")] {
-            let (mut tx_pin, mut rx_pin) = (io.pins.gpio21, io.pins.gpio20);
-        } else if #[cfg(feature = "esp32c6")] {
-            let (mut tx_pin, mut rx_pin) = (io.pins.gpio16, io.pins.gpio17);
-        } else if #[cfg(feature = "esp32h2")] {
-            let (mut tx_pin, mut rx_pin) = (io.pins.gpio24, io.pins.gpio23);
-        } else if #[cfg(any(feature = "esp32s2", feature = "esp32s3"))] {
-            let (mut tx_pin, mut rx_pin) = (io.pins.gpio43, io.pins.gpio44);
-        }
-    }
+    // let delay = Delay::new(&clocks);
 
-    let mut uart0 =
-        Uart::new_with_default_pins(peripherals.UART0, &clocks, &mut tx_pin, &mut rx_pin).unwrap();
+    // let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
 
-    loop {
-        writeln!(uart0, "Hello world!").unwrap();
-        delay.delay(1.secs());
-    }
+    // // Default pins for Uart/Serial communication
+    // cfg_if::cfg_if! {
+    //     if #[cfg(feature = "esp32")] {
+    //         let (mut tx_pin, mut rx_pin) = (io.pins.gpio1, io.pins.gpio3);
+    //     } else if #[cfg(feature = "esp32c2")] {
+    //         let (mut tx_pin, mut rx_pin) = (io.pins.gpio20, io.pins.gpio19);
+    //     } else if #[cfg(feature = "esp32c3")] {
+    //         let (mut tx_pin, mut rx_pin) = (io.pins.gpio21, io.pins.gpio20);
+    //     } else if #[cfg(feature = "esp32c6")] {
+    //         let (mut tx_pin, mut rx_pin) = (io.pins.gpio16, io.pins.gpio17);
+    //     } else if #[cfg(feature = "esp32h2")] {
+    //         let (mut tx_pin, mut rx_pin) = (io.pins.gpio24, io.pins.gpio23);
+    //     } else if #[cfg(any(feature = "esp32s2", feature = "esp32s3"))] {
+    //         let (mut tx_pin, mut rx_pin) = (io.pins.gpio43, io.pins.gpio44);
+    //     }
+    // }
+
+    // let mut uart0 =
+    //     Uart::new_with_default_pins(peripherals.UART0, &clocks, &mut tx_pin, &mut rx_pin).unwrap();
+
+    // loop {
+    //     writeln!(uart0, "Hello world!").unwrap();
+    //     delay.delay(1.secs());
+    // }
 }
