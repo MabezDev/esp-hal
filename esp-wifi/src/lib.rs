@@ -200,12 +200,10 @@ pub enum EspWifiDeinitialization {
     WifiBle(EspWifiDeinitializationInternal),
 }
 
-
-
 #[derive(Debug, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 /// Initialize the driver for WiFi, Bluetooth or both.
-pub enum EspWifiOperationFor {
+pub enum EspWifiFor {
     #[cfg(feature = "wifi")]
     Wifi,
     #[cfg(feature = "ble")]
@@ -214,12 +212,12 @@ pub enum EspWifiOperationFor {
     WifiBle,
 }
 
-impl EspWifiOperationFor {
+impl EspWifiFor {
     #[allow(unused)]
     fn is_wifi(&self) -> bool {
         match self {
             #[cfg(feature = "ble")]
-            EspWifiOperationFor::Ble => false,
+            EspWifiFor::Ble => false,
             _ => true,
         }
     }
@@ -228,7 +226,7 @@ impl EspWifiOperationFor {
     fn is_ble(&self) -> bool {
         match self {
             #[cfg(feature = "wifi")]
-            EspWifiOperationFor::Wifi => false,
+            EspWifiFor::Wifi => false,
             _ => true,
         }
     }
@@ -298,11 +296,11 @@ impl EspWifiTimerSource for TimeBase {
 /// ```rust, no_run
 #[doc = esp_hal::before_snippet!()]
 /// use esp_hal::{rng::Rng, timg::TimerGroup};
-/// use esp_wifi::EspWifiOperationFor;
+/// use esp_wifi::EspWifiFor;
 ///
 /// let timg0 = TimerGroup::new(peripherals.TIMG0);
 /// let init = esp_wifi::initialize(
-///     EspWifiOperationFor::Wifi,
+///     EspWifiFor::Wifi,
 ///     timg0.timer0,
 ///     Rng::new(peripherals.RNG),
 ///     peripherals.RADIO_CLK,
@@ -311,7 +309,7 @@ impl EspWifiTimerSource for TimeBase {
 /// # }
 /// ```
 pub fn initialize(
-    init_for: EspWifiOperationFor,
+    init_for: EspWifiFor,
     timer: impl EspWifiTimerSource,
     rng: hal::rng::Rng,
     radio_clocks: hal::peripherals::RADIO_CLK,
@@ -359,19 +357,19 @@ pub fn initialize(
 
     match init_for {
         #[cfg(feature = "wifi")]
-        EspWifiOperationFor::Wifi => Ok(EspWifiInitialization::Wifi(EspWifiInitializationInternal)),
+        EspWifiFor::Wifi => Ok(EspWifiInitialization::Wifi(EspWifiInitializationInternal)),
         #[cfg(feature = "ble")]
-        EspWifiOperationFor::Ble => Ok(EspWifiInitialization::Ble(EspWifiInitializationInternal)),
+        EspWifiFor::Ble => Ok(EspWifiInitialization::Ble(EspWifiInitializationInternal)),
         #[cfg(coex)]
-        EspWifiOperationFor::WifiBle => Ok(EspWifiInitialization::WifiBle(
+        EspWifiFor::WifiBle => Ok(EspWifiInitialization::WifiBle(
             EspWifiInitializationInternal,
         )),
     }
 }
 
 pub fn reinitialize(
-    init_for: EspWifiOperationFor,
-    deinit_state: EspWifiDeinitialization,
+    init_for: EspWifiFor,
+    _deinit_state: EspWifiDeinitialization,
 ) -> Result<EspWifiInitialization, InitializationError> {
     // A minimum clock of 80MHz is required to operate WiFi module.
     const MIN_CLOCK: u32 = 80;
@@ -412,16 +410,15 @@ pub fn reinitialize(
 
     match init_for {
         #[cfg(feature = "wifi")]
-        EspWifiOperationFor::Wifi => Ok(EspWifiInitialization::Wifi(EspWifiInitializationInternal)),
+        EspWifiFor::Wifi => Ok(EspWifiInitialization::Wifi(EspWifiInitializationInternal)),
         #[cfg(feature = "ble")]
-        EspWifiOperationFor::Ble => Ok(EspWifiInitialization::Ble(EspWifiInitializationInternal)),
+        EspWifiFor::Ble => Ok(EspWifiInitialization::Ble(EspWifiInitializationInternal)),
         #[cfg(coex)]
-        EspWifiOperationFor::WifiBle => Ok(EspWifiInitialization::WifiBle(
+        EspWifiFor::WifiBle => Ok(EspWifiInitialization::WifiBle(
             EspWifiInitializationInternal,
         )),
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
