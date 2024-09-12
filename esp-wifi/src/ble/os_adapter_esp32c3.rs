@@ -204,8 +204,10 @@ pub(crate) unsafe extern "C" fn interrupt_on(intr_num: i32) {
     // NO-OP
 }
 
-pub(crate) unsafe extern "C" fn interrupt_off(_intr_num: i32) {
-    todo!();
+pub(crate) unsafe extern "C" fn interrupt_off(intr_num: i32) {
+    trace!("interrupt_off {}", intr_num);
+
+    // NO-OP
 }
 
 pub(crate) fn btdm_controller_mem_init() {
@@ -315,4 +317,13 @@ pub(crate) unsafe extern "C" fn ets_backup_dma_copy(
     _to_rem: i32,
 ) {
     todo!();
+}
+
+pub(crate) fn bt_deinit() {
+    extern "C" {
+        fn btdm_controller_deinit();
+        fn bt_controller_deinit_internal();
+    }
+
+    unsafe {btdm_controller_deinit();}
 }
