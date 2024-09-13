@@ -73,6 +73,10 @@ pub(crate) fn bt_periph_module_enable() {
     // nothing
 }
 
+pub(crate) fn bt_periph_module_disable() {
+    // nothing
+}
+
 pub(crate) fn disable_sleep_mode() {
     // nothing
 }
@@ -122,13 +126,4 @@ pub(super) unsafe extern "C" fn ble_ll_random_override() -> u32 {
         VALUE = VALUE.wrapping_add(3);
         VALUE
     }
-}
-
-pub(crate) fn bt_deinit() {
-    extern "C" {
-        fn btdm_controller_deinit();
-        fn bt_controller_deinit_internal();
-    }
-
-    unsafe {btdm_controller_deinit();}
 }
