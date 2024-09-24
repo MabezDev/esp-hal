@@ -13,7 +13,6 @@ categories = ["embedded", "hardware-support", "no-std"]
 
 [dependencies]
 defmt = { version = "0.3.8", optional = true }
-bleps = { git = "https://github.com/bjoernQ/bleps", package = "bleps", rev = "a5148d8ae679e021b78f53fd33afb8bb35d0b62e", features = [ "macros", "async"] }
 document-features  = "0.2.10"
 esp-alloc = { version = "0.4.0", path = "../esp-alloc", optional = true }
 esp-hal = { version = "0.20.0", path = "../esp-hal", default-features = false }
