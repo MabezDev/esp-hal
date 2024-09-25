@@ -43,7 +43,7 @@ fn setup_iface<'a, MODE: WifiDeviceMode>(
 /// You can use the provided macros to create and pass a suitable backing
 /// storage.
 pub fn create_network_interface<'a, 'd, MODE: WifiDeviceMode>(
-    inited: &EspWifiInitialization,
+    inited: &'d EspWifiInitialization,
     device: &'d mut (impl crate::hal::peripheral::Peripheral<P = crate::hal::peripherals::WIFI> + 'd),
     mode: MODE,
     storage: &'a mut [SocketStorage<'a>],
@@ -74,7 +74,7 @@ pub struct ApStaInterface<'a, 'd> {
 }
 
 pub fn create_ap_sta_network_interface<'a, 'd>(
-    inited: &EspWifiInitialization,
+    inited: &'d EspWifiInitialization,
     device: impl crate::hal::peripheral::Peripheral<P = crate::hal::peripherals::WIFI> + 'd,
     ap_storage: &'a mut [SocketStorage<'a>],
     sta_storage: &'a mut [SocketStorage<'a>],

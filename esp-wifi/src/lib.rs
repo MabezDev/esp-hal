@@ -24,6 +24,8 @@ extern crate alloc;
 // MUST be the first module
 mod fmt;
 
+use core::marker::PhantomData;
+
 use common_adapter::{
     chip_specific::phy_mem_init,
     deinit_radio_clock_control,
@@ -49,6 +51,7 @@ use crate::{
 };
 use crate::{
     common_adapter::init_rng,
+    hal::peripheral::Peripheral,
     tasks::{deinit_tasks, init_tasks},
     timer::{setup_timer_isr, shutdown_timer_isr},
 };
@@ -158,24 +161,33 @@ type TimeBase = PeriodicTimer<'static, AnyTimer>;
 
 #[derive(Debug, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[non_exhaustive]
 /// An internal struct designed to make [`EspWifiInitialization`] uncreatable
 /// outside of this crate.
-pub struct EspWifiInitializationInternal;
+pub struct EspWifiInitializationInternal<'d>(PhantomData<&'d ()>);
 
 #[derive(Debug, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 /// Initialized the driver for WiFi, Bluetooth or both.
-pub enum EspWifiInitialization {
+pub enum EspWifiInitialization<'d> {
     #[cfg(feature = "wifi")]
-    Wifi(EspWifiInitializationInternal),
+    Wifi(EspWifiInitializationInternal<'d>),
     #[cfg(feature = "ble")]
-    Ble(EspWifiInitializationInternal),
+    Ble(EspWifiInitializationInternal<'d>),
     #[cfg(coex)]
-    WifiBle(EspWifiInitializationInternal),
+    WifiBle(EspWifiInitializationInternal<'d>),
 }
 
-impl EspWifiInitialization {
+impl<'d> Drop for EspWifiInitialization<'d> {
+    fn drop(&mut self) {
+        // by the time EspWifiInitialization is dropped, no other driver can be using
+        // the radio
+        unsafe {
+            deinit_unsafe().ok();
+        }
+    }
+}
+
+impl<'d> EspWifiInitialization<'d> {
     #[allow(unused)]
     fn is_wifi(&self) -> bool {
         match self {
@@ -303,12 +315,12 @@ impl EspWifiTimerSource for TimeBase {
 /// .unwrap();
 /// # }
 /// ```
-pub fn init(
+pub fn init<'d, T: EspWifiTimerSource>(
     init_for: EspWifiInitFor,
-    timer: impl EspWifiTimerSource,
+    mut timer: impl Peripheral<P = T> + 'd,
     rng: hal::rng::Rng,
-    radio_clocks: hal::peripherals::RADIO_CLK,
-) -> Result<EspWifiInitialization, InitializationError> {
+    _radio_clocks: impl Peripheral<P = hal::peripherals::RADIO_CLK> + 'd,
+) -> Result<EspWifiInitialization<'d>, InitializationError> {
     // A minimum clock of 80MHz is required to operate WiFi module.
     const MIN_CLOCK: u32 = 80;
     let clocks = Clocks::get();
@@ -319,10 +331,10 @@ pub fn init(
     info!("esp-wifi configuration {:?}", crate::CONFIG);
     crate::common_adapter::chip_specific::enable_wifi_power_domain();
     phy_mem_init();
-    init_radio_clock_control(radio_clocks);
+    init_radio_clock_control(unsafe { hal::peripherals::RADIO_CLK::steal() });
     init_rng(rng);
     init_tasks();
-    setup_timer_isr(timer.timer())?;
+    setup_timer_isr(unsafe { timer.clone_unchecked() }.timer())?;
 
     wifi_set_log_verbose();
     init_clocks();
@@ -351,27 +363,27 @@ pub fn init(
 
     match init_for {
         #[cfg(feature = "wifi")]
-        EspWifiInitFor::Wifi => Ok(EspWifiInitialization::Wifi(EspWifiInitializationInternal)),
+        EspWifiInitFor::Wifi => Ok(EspWifiInitialization::Wifi(EspWifiInitializationInternal(
+            PhantomData,
+        ))),
         #[cfg(feature = "ble")]
-        EspWifiInitFor::Ble => Ok(EspWifiInitialization::Ble(EspWifiInitializationInternal)),
+        EspWifiInitFor::Ble => Ok(EspWifiInitialization::Ble(EspWifiInitializationInternal(
+            PhantomData,
+        ))),
         #[cfg(coex)]
         EspWifiInitFor::WifiBle => Ok(EspWifiInitialization::WifiBle(
-            EspWifiInitializationInternal,
+            EspWifiInitializationInternal(PhantomData),
         )),
     }
 }
 
-pub fn deinit(
-    _init: EspWifiInitialization,
-) -> Result<(TimeBase, hal::peripherals::RADIO_CLK), InitializationError> {
-    unsafe { deinit_unsafe() }
+pub fn deinit(_init: EspWifiInitialization) -> Result<(), InitializationError> {
+    // runs `Drop` on EspWifiInitialization
+    Ok(())
 }
 
-///
 /// # Safety TODO
-///
-pub unsafe fn deinit_unsafe() -> Result<(TimeBase, hal::peripherals::RADIO_CLK), InitializationError>
-{
+pub unsafe fn deinit_unsafe() -> Result<(), InitializationError> {
     // Disable coexistence
     #[cfg(coex)]
     {
@@ -399,13 +411,12 @@ pub unsafe fn deinit_unsafe() -> Result<(TimeBase, hal::peripherals::RADIO_CLK),
     shutdown_timer_isr().unwrap();
     deinit_tasks();
 
-    let timer = critical_section::with(|cs| crate::timer::TIMER.borrow_ref_mut(cs).take())
-        .ok_or(InitializationError::TimerUnavailable)?;
+    // remove the timer from the global variable
+    critical_section::with(|cs| crate::timer::TIMER.borrow_ref_mut(cs).take());
 
-    let radio_clocks =
-        deinit_radio_clock_control().ok_or(InitializationError::RadioClockUnavailable)?;
+    deinit_radio_clock_control();
 
-    Ok((timer, radio_clocks))
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]

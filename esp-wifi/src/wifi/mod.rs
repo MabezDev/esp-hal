@@ -1577,7 +1577,7 @@ pub fn new_with_config<'d, MODE: WifiDeviceMode>(
 /// This function will panic if the mode is [`WifiMode::ApSta`].
 /// If you want to use AP-STA mode, use `[new_ap_sta]`.
 pub fn new_with_mode<'d, MODE: WifiDeviceMode>(
-    inited: &EspWifiInitialization,
+    inited: &'d EspWifiInitialization,
     device: impl crate::hal::peripheral::Peripheral<P = crate::hal::peripherals::WIFI> + 'd,
     _mode: MODE,
 ) -> Result<(WifiDevice<'d, MODE>, WifiController<'d>), WifiError> {
@@ -1589,7 +1589,7 @@ pub fn new_with_mode<'d, MODE: WifiDeviceMode>(
 ///
 /// Returns a tuple of `(AP device, STA device, controller)`.
 pub fn new_ap_sta<'d>(
-    inited: &EspWifiInitialization,
+    inited: &'d EspWifiInitialization,
     device: impl Peripheral<P = crate::hal::peripherals::WIFI> + 'd,
 ) -> Result<
     (
@@ -1606,7 +1606,7 @@ pub fn new_ap_sta<'d>(
 ///
 /// Returns a tuple of `(AP device, STA device, controller)`.
 pub fn new_ap_sta_with_config<'d>(
-    inited: &EspWifiInitialization,
+    inited: &'d EspWifiInitialization,
     device: impl Peripheral<P = crate::hal::peripherals::WIFI> + 'd,
     sta_config: crate::wifi::ClientConfiguration,
     ap_config: crate::wifi::AccessPointConfiguration,
