@@ -598,11 +598,11 @@ impl<'d> EspNow<'d> {
             esp_wifi_set_inactive_time(wifi_interface_t_WIFI_IF_STA, crate::CONFIG.beacon_timeout)
         })?;
         cfg_if::cfg_if! {
-            if #[cfg(feature = "ps-min-modem")] {
+            if #[cfg(ps_min_modem)] {
                 check_error!({esp_wifi_set_ps(
                     crate::binary::include::wifi_ps_type_t_WIFI_PS_MIN_MODEM
                 )})?;
-            } else if #[cfg(feature = "ps-max-modem")] {
+            } else if #[cfg(ps_max_modem)] {
                 check_error!({esp_wifi_set_ps(
                     crate::binary::include::wifi_ps_type_t_WIFI_PS_MAX_MODEM
                 )})?;
@@ -737,7 +737,7 @@ unsafe extern "C" fn send_cb(_mac_addr: *const u8, status: esp_now_send_status_t
 
         ESP_NOW_SEND_CB_INVOKED.store(true, Ordering::Release);
 
-        #[cfg(feature = "async")]
+        
         asynch::ESP_NOW_TX_WAKER.wake();
     })
 }
@@ -789,15 +789,15 @@ unsafe extern "C" fn rcv_cb(
             info,
         }));
 
-        #[cfg(feature = "async")]
+        
         asynch::ESP_NOW_RX_WAKER.wake();
     });
 }
 
-#[cfg(feature = "async")]
+
 pub use asynch::SendFuture;
 
-#[cfg(feature = "async")]
+
 mod asynch {
     use core::task::{Context, Poll};
 

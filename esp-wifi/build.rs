@@ -127,6 +127,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             ("ap_beacon_timeout", Value::UnsignedInteger(300), "For SoftAP, If the SoftAP doesn’t receive any data from the connected STA during inactive time, the SoftAP will force deauth the STA. Default is 300s"),
             ("failure_retry_cnt", Value::UnsignedInteger(1), "Number of connection retries station will do before moving to next AP. scan_method should be set as WIFI_ALL_CHANNEL_SCAN to use this config. Note: Enabling this may cause connection time to increase incase best AP doesn't behave properly. Defaults to 1"),
             ("scan_method", Value::UnsignedInteger(0), "0 = WIFI_FAST_SCAN, 1 = WIFI_ALL_CHANNEL_SCAN, defaults to 0"),
+            ("phy_enable_usb", Value::Bool(true), "Ensure that USB operates correctly when using WiFi, at the cost of RF performance."),
+            ("ps_min_modem", Value::Bool(false), "Enable minimum modem sleep. Only affects STA mode."),
+            ("ps_max_modem", Value::Bool(false), "Enable maximum modem sleep. Only affects STA mode."),
         ],
         true
     );

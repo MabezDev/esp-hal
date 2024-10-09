@@ -1348,7 +1348,7 @@ unsafe extern "C" fn ble_hs_hci_rx_evt(cmd: *const u8, arg: *const c_void) -> i3
 
     r_ble_hci_trans_buf_free(cmd);
 
-    #[cfg(feature = "async")]
+    
     crate::ble::controller::asynch::hci_read_data_available();
 
     0
@@ -1383,7 +1383,7 @@ unsafe extern "C" fn ble_hs_rx_data(om: *const OsMbuf, arg: *const c_void) -> i3
 
     r_os_mbuf_free_chain(om as *mut _);
 
-    #[cfg(feature = "async")]
+    
     crate::ble::controller::asynch::hci_read_data_available();
 
     0
@@ -1393,7 +1393,7 @@ static mut BLE_HCI_READ_DATA: [u8; 256] = [0u8; 256];
 static mut BLE_HCI_READ_DATA_INDEX: usize = 0;
 static mut BLE_HCI_READ_DATA_LEN: usize = 0;
 
-#[cfg(feature = "async")]
+
 pub fn have_hci_read_data() -> bool {
     critical_section::with(|cs| {
         let queue = BT_RECEIVE_QUEUE.borrow_ref_mut(cs);

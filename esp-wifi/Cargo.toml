@@ -95,16 +95,6 @@ esp32s3 = [
   "esp-wifi-sys/esp32s3",
 ]
 
-## Enable Async support
-async = [
-  "dep:embassy-sync",
-  "dep:embedded-io-async",
-  "dep:bt-hci",
-]
-
-## Enable `embassy-net` support
-embassy-net = ["dep:embassy-net-driver", "async"]
-
 ## Enable WiFi-BLE coexistence support
 coex = []
 
@@ -121,19 +111,10 @@ smoltcp = ["dep:smoltcp"]
 utils = ["smoltcp"]
 
 ## Enable WiFi support
-wifi = ["dep:enumset", "dep:no-std-net"]
+wifi = ["dep:enumset", "dep:no-std-net", "dep:embassy-net-driver", "dep:embedded-io-async", "dep:embassy-sync"]
 
 ## Enable BLE support
-ble = ["esp-hal/bluetooth"]
-
-## See USB-SERIAL-JTAG below
-phy-enable-usb = []
-
-## Enable minimum modem sleep. Only affects STA mode
-ps-min-modem = []
-
-## Enable maximum modem sleep. Only affects STA mode
-ps-max-modem = []
+ble = ["esp-hal/bluetooth", "dep:bt-hci"]
 
 ## Enable esp-now support
 esp-now = ["wifi"]

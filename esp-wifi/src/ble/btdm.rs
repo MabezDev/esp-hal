@@ -97,7 +97,7 @@ extern "C" fn notify_host_recv(data: *mut u8, len: u16) -> i32 {
 
         dump_packet_info(core::slice::from_raw_parts(data as *const u8, len as usize));
 
-        #[cfg(feature = "async")]
+        
         crate::ble::controller::asynch::hci_read_data_available();
     }
 
@@ -536,7 +536,7 @@ static mut BLE_HCI_READ_DATA: [u8; 256] = [0u8; 256];
 static mut BLE_HCI_READ_DATA_INDEX: usize = 0;
 static mut BLE_HCI_READ_DATA_LEN: usize = 0;
 
-#[cfg(feature = "async")]
+
 pub fn have_hci_read_data() -> bool {
     critical_section::with(|cs| {
         let queue = BT_RECEIVE_QUEUE.borrow_ref_mut(cs);

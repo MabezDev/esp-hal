@@ -79,7 +79,7 @@ impl Write for BleConnector<'_> {
 }
 
 /// Async Interface
-#[cfg(feature = "async")]
+
 pub mod asynch {
     use core::task::Poll;
 
