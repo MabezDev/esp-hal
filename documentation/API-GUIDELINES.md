@@ -25,6 +25,7 @@ The following paragraphs contain additional recommendations.
     - see [this example](https://github.com/esp-rs/esp-hal/blob/df2b7bd8472cc1d18db0d9441156575570f59bb3/esp-hal/src/spi/mod.rs#L15)
     - e.g. `#[cfg_attr(feature = "defmt", derive(defmt::Format))]`
 - Don't use `log::XXX!` macros directly - use the wrappers in `fmt.rs` (e.g. just `info!` instead of `log::info!` or importing `log::*`)!
+- Don't use `core::assert!` macros _unless_ you need to assert in a `const` context. For a runtime use, prefer the macros defined in `fmt.rs`
 
 ## API Surface
 
@@ -45,6 +46,11 @@ The following paragraphs contain additional recommendations.
     - For example starting a timer is fine for `&self`, worst case a timer will be started twice if two parts of the program call it. You can see a real example of this [here](https://github.com/esp-rs/esp-hal/pull/1500#pullrequestreview-2015911974)
 - Maintain order consistency in the API, such as in the case of pairs like RX/TX.
 - If your driver provides a way to listen for interrupts, the interrupts should be listed in a `derive(EnumSetType)` enum as opposed to one function per interrupt flag.
+- Enums should not prefix the variant names with the enum name itself, i.e a `Parity` enum should have variants like `Parity::None`, not `Parity::ParityNone`
+- Driver `Config` structs should be `#[non_exaustive]` unless it's certain to never see additions.
+- 
+- `asynch` modules shouldn't be public, reexport the items within instead.
+- 
 
 ## Maintainability
 
