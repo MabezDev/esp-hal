@@ -1,6 +1,6 @@
-use core::arch::{global_asm, naked_asm};
+use core::arch::global_asm;
 
-use crate::cfg_naked_asm;
+use crate::cfg_global_asm;
 
 // We could cfg symbols away and reduce frame size depending on features enabled
 // i.e the frame size is a fixed size based on all the features right now
@@ -92,182 +92,6 @@ global_asm!(
     "
 );
 
-/// Save processor state to stack.
-///
-/// *Must only be called with call0.*
-/// *For spill all window registers to work WOE must be enabled on entry
-///
-/// Saves all registers except PC, PS, A0, A1
-///
-/// Inputs:
-///     A0 is the return address
-///     A1 is the stack pointers
-///     Exceptions are disabled (PS.EXCM = 1)
-///
-/// Output:
-///     A0 is the return address
-///     A1 is the stack pointer
-///     A3, A9 are used as scratch registers
-///     EPC1 is changed
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn save_context() {
-    cfg_naked_asm!(
-    {
-        "
-        s32i    a2,  sp, +XT_STK_A2
-        s32i    a3,  sp, +XT_STK_A3
-        s32i    a4,  sp, +XT_STK_A4
-        s32i    a5,  sp, +XT_STK_A5
-        s32i    a6,  sp, +XT_STK_A6
-        s32i    a7,  sp, +XT_STK_A7
-        s32i    a8,  sp, +XT_STK_A8
-        s32i    a9,  sp, +XT_STK_A9
-        s32i    a10, sp, +XT_STK_A10
-        s32i    a11, sp, +XT_STK_A11
-        s32i    a12, sp, +XT_STK_A12
-        s32i    a13, sp, +XT_STK_A13
-        s32i    a14, sp, +XT_STK_A14
-        s32i    a15, sp, +XT_STK_A15
-
-        rsr     a3,  SAR
-        s32i    a3,  sp, +XT_STK_SAR
-        ",
-        #[cfg(all(XCHAL_HAVE_CP, not(feature = "float-save-restore")))]
-        "
-        /* Disable coprocessor, any use of floats in ISRs will cause an exception unless float-save-restore feature is enabled */
-        rsr     a3, CPENABLE
-        s32i    a3, sp, +XT_STK_F64R_LO_CPENABLE
-        movi    a3,  0
-        wsr     a3,  CPENABLE
-        rsync
-        ",
-        #[cfg(XCHAL_HAVE_LOOPS)]
-        "
-        // Loop Option
-        rsr     a3,  LBEG
-        s32i    a3,  sp, +XT_STK_LBEG
-        rsr     a3,  LEND
-        s32i    a3,  sp, +XT_STK_LEND
-        rsr     a3,  LCOUNT
-        s32i    a3,  sp, +XT_STK_LCOUNT
-        ",
-        #[cfg(XCHAL_HAVE_THREADPTR)]
-        "
-        // Thread Pointer Option
-        rur     a3, threadptr
-        s32i    a3, sp, +XT_STK_THREADPTR
-        ",
-        #[cfg(XCHAL_HAVE_S32C1I)]
-        "
-        // Conditional Store Option
-        rsr     a3, scompare1
-        s32i    a3, sp, +XT_STK_SCOMPARE1
-        ",
-        #[cfg(XCHAL_HAVE_BOOLEANS)]
-        "
-        // Boolean Option
-        rsr     a3, br
-        s32i    a3, sp, +XT_STK_BR
-        ",
-        #[cfg(XCHAL_HAVE_MAC16)]
-        "
-        // MAC16 Option
-        rsr     a3, acclo
-        s32i    a3, sp, +XT_STK_ACCLO
-        rsr     a3, acchi
-        s32i    a3, sp, +XT_STK_ACCHI
-        rsr     a3, m0
-        s32i    a3, sp, +XT_STK_M0
-        rsr     a3, m1
-        s32i    a3, sp, +XT_STK_M1
-        rsr     a3, m2
-        s32i    a3, sp, +XT_STK_M2
-        rsr     a3, m3
-        s32i    a3, sp, +XT_STK_M3
-        ",
-        #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_DFP_ACCEL))]
-        "
-        // Double Precision Accelerator Option
-        rur     a3, f64r_lo
-        s32i    a3, sp, +XT_STK_F64R_LO_CPENABLE
-        rur     a3, f64r_hi
-        s32i    a3, sp, +XT_STK_F64R_HI
-        rur     a3, f64s
-        s32i    a3, sp, +XT_STK_F64S
-        ",
-        #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_FP))]
-        "
-        // Coprocessor Option
-        rur     a3, fcr
-        s32i    a3, sp, +XT_STK_FCR
-        rur     a3, fsr
-        s32i    a3, sp, +XT_STK_FSR
-        ssi     f0, sp, +XT_STK_F0
-        ssi     f1, sp, +XT_STK_F1
-        ssi     f2, sp, +XT_STK_F2
-        ssi     f3, sp, +XT_STK_F3
-        ssi     f4, sp, +XT_STK_F4
-        ssi     f5, sp, +XT_STK_F5
-        ssi     f6, sp, +XT_STK_F6
-        ssi     f7, sp, +XT_STK_F7
-        ssi     f8, sp, +XT_STK_F8
-        ssi     f9, sp, +XT_STK_F9
-        ssi     f10, sp, +XT_STK_F10
-        ssi     f11, sp, +XT_STK_F11
-        ssi     f12, sp, +XT_STK_F12
-        ssi     f13, sp, +XT_STK_F13
-        ssi     f14, sp, +XT_STK_F14
-        ssi     f15, sp, +XT_STK_F15
-        ",
-        #[cfg(XCHAL_HAVE_WINDOWED)]
-        "
-        s32i    a0, sp, +XT_STK_TMP        // keep return address on the stack
-
-        // SPILL_REGISTERS macro requires window overflow exceptions to be enabled,
-        // i.e. PS.EXCM cleared and PS.WOE set.
-        // Since we are going to clear PS.EXCM, we also need to increase INTLEVEL
-        // at least to XCHAL_EXCM_LEVEL. This matches that value of effective INTLEVEL
-        // at entry (CINTLEVEL=max(PS.INTLEVEL, XCHAL_EXCM_LEVEL) when PS.EXCM is set.
-        // Since WindowOverflow exceptions will trigger inside SPILL_REGISTERS,
-        // need to save/restore EPC1 as well.
-        // Note: even though a4-a15 are saved into the exception frame, we should not
-        // clobber them until after SPILL_REGISTERS. This is because these registers
-        // may contain live windows belonging to previous frames in the call stack.
-        // These frames will be spilled by SPILL_REGISTERS, and if the register was
-        // used as a temporary by this code, the temporary value would get stored
-        // onto the stack, instead of the real value.
-        //
-
-        rsr     a2, PS                     // to be restored after SPILL_REGISTERS
-        movi    a0, PS_INTLEVEL_MASK
-        and     a3, a2, a0                 // get the current INTLEVEL
-        bgeui   a3, +PS_INTLEVEL_EXCM, 1f  // calculate max(INTLEVEL, XCHAL_EXCM_LEVEL) - 3 = XCHAL_EXCM_LEVEL
-        movi    a3, PS_INTLEVEL_EXCM
-        1:
-        movi    a0, PS_WOE       // clear EXCM, enable window overflow, set new INTLEVEL
-        or      a3, a3, a0
-        wsr     a3, ps
-        rsr     a0, EPC1
-
-        addmi   sp,  sp, +XT_STK_FRMSZ   // go back to spill register region
-        SPILL_REGISTERS
-        addmi   sp,  sp, -XT_STK_FRMSZ   // return the current stack pointer
-
-        wsr     a2, PS                   //  restore to the value at entry
-        rsync
-        wsr     a0, EPC1
-
-        l32i    a0,  sp, +XT_STK_TMP
-        ",
-        "
-        ret
-        ",
-    },
-    );
-}
-
 global_asm!(
     r#"
     // Spills all active windowed registers (i.e. registers not visible as
@@ -351,18 +175,193 @@ global_asm!(
     "#
 );
 
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn restore_context() {
-    cfg_naked_asm!(
-    {
-        "
+// Save processor state to stack.
+//
+// *Must only be called with call0.*
+// *For spill all window registers to work WOE must be enabled on entry
+//
+// Saves all registers except PC, PS, A0, A1
+//
+// Inputs:
+//     A0 is the return address
+//     A1 is the stack pointers
+//     Exceptions are disabled (PS.EXCM = 1)
+//
+// Output:
+//     A0 is the return address
+//     A1 is the stack pointer
+//     A3, A9 are used as scratch registers
+//     EPC1 is changed
+cfg_global_asm!(
+{
+    "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global save_context
+        save_context:
+        s32i    a2,  sp, +XT_STK_A2
+        s32i    a3,  sp, +XT_STK_A3
+        s32i    a4,  sp, +XT_STK_A4
+        s32i    a5,  sp, +XT_STK_A5
+        s32i    a6,  sp, +XT_STK_A6
+        s32i    a7,  sp, +XT_STK_A7
+        s32i    a8,  sp, +XT_STK_A8
+        s32i    a9,  sp, +XT_STK_A9
+        s32i    a10, sp, +XT_STK_A10
+        s32i    a11, sp, +XT_STK_A11
+        s32i    a12, sp, +XT_STK_A12
+        s32i    a13, sp, +XT_STK_A13
+        s32i    a14, sp, +XT_STK_A14
+        s32i    a15, sp, +XT_STK_A15
+
+        rsr     a3,  SAR
+        s32i    a3,  sp, +XT_STK_SAR
+        ",
+    #[cfg(all(XCHAL_HAVE_CP, not(feature = "float-save-restore")))]
+    "
+        /* Disable coprocessor, any use of floats in ISRs will cause an exception unless float-save-restore feature is enabled */
+        rsr     a3, CPENABLE
+        s32i    a3, sp, +XT_STK_F64R_LO_CPENABLE
+        movi    a3,  0
+        wsr     a3,  CPENABLE
+        rsync
+        ",
+    #[cfg(XCHAL_HAVE_LOOPS)]
+    "
+        // Loop Option
+        rsr     a3,  LBEG
+        s32i    a3,  sp, +XT_STK_LBEG
+        rsr     a3,  LEND
+        s32i    a3,  sp, +XT_STK_LEND
+        rsr     a3,  LCOUNT
+        s32i    a3,  sp, +XT_STK_LCOUNT
+        ",
+    #[cfg(XCHAL_HAVE_THREADPTR)]
+    "
+        // Thread Pointer Option
+        rur     a3, threadptr
+        s32i    a3, sp, +XT_STK_THREADPTR
+        ",
+    #[cfg(XCHAL_HAVE_S32C1I)]
+    "
+        // Conditional Store Option
+        rsr     a3, scompare1
+        s32i    a3, sp, +XT_STK_SCOMPARE1
+        ",
+    #[cfg(XCHAL_HAVE_BOOLEANS)]
+    "
+        // Boolean Option
+        rsr     a3, br
+        s32i    a3, sp, +XT_STK_BR
+        ",
+    #[cfg(XCHAL_HAVE_MAC16)]
+    "
+        // MAC16 Option
+        rsr     a3, acclo
+        s32i    a3, sp, +XT_STK_ACCLO
+        rsr     a3, acchi
+        s32i    a3, sp, +XT_STK_ACCHI
+        rsr     a3, m0
+        s32i    a3, sp, +XT_STK_M0
+        rsr     a3, m1
+        s32i    a3, sp, +XT_STK_M1
+        rsr     a3, m2
+        s32i    a3, sp, +XT_STK_M2
+        rsr     a3, m3
+        s32i    a3, sp, +XT_STK_M3
+        ",
+    #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_DFP_ACCEL))]
+    "
+        // Double Precision Accelerator Option
+        rur     a3, f64r_lo
+        s32i    a3, sp, +XT_STK_F64R_LO_CPENABLE
+        rur     a3, f64r_hi
+        s32i    a3, sp, +XT_STK_F64R_HI
+        rur     a3, f64s
+        s32i    a3, sp, +XT_STK_F64S
+        ",
+    #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_FP))]
+    "
+        // Coprocessor Option
+        rur     a3, fcr
+        s32i    a3, sp, +XT_STK_FCR
+        rur     a3, fsr
+        s32i    a3, sp, +XT_STK_FSR
+        ssi     f0, sp, +XT_STK_F0
+        ssi     f1, sp, +XT_STK_F1
+        ssi     f2, sp, +XT_STK_F2
+        ssi     f3, sp, +XT_STK_F3
+        ssi     f4, sp, +XT_STK_F4
+        ssi     f5, sp, +XT_STK_F5
+        ssi     f6, sp, +XT_STK_F6
+        ssi     f7, sp, +XT_STK_F7
+        ssi     f8, sp, +XT_STK_F8
+        ssi     f9, sp, +XT_STK_F9
+        ssi     f10, sp, +XT_STK_F10
+        ssi     f11, sp, +XT_STK_F11
+        ssi     f12, sp, +XT_STK_F12
+        ssi     f13, sp, +XT_STK_F13
+        ssi     f14, sp, +XT_STK_F14
+        ssi     f15, sp, +XT_STK_F15
+        ",
+    #[cfg(XCHAL_HAVE_WINDOWED)]
+    "
+        s32i    a0, sp, +XT_STK_TMP        // keep return address on the stack
+
+        // SPILL_REGISTERS macro requires window overflow exceptions to be enabled,
+        // i.e. PS.EXCM cleared and PS.WOE set.
+        // Since we are going to clear PS.EXCM, we also need to increase INTLEVEL
+        // at least to XCHAL_EXCM_LEVEL. This matches that value of effective INTLEVEL
+        // at entry (CINTLEVEL=max(PS.INTLEVEL, XCHAL_EXCM_LEVEL) when PS.EXCM is set.
+        // Since WindowOverflow exceptions will trigger inside SPILL_REGISTERS,
+        // need to save/restore EPC1 as well.
+        // Note: even though a4-a15 are saved into the exception frame, we should not
+        // clobber them until after SPILL_REGISTERS. This is because these registers
+        // may contain live windows belonging to previous frames in the call stack.
+        // These frames will be spilled by SPILL_REGISTERS, and if the register was
+        // used as a temporary by this code, the temporary value would get stored
+        // onto the stack, instead of the real value.
+        //
+
+        rsr     a2, PS                     // to be restored after SPILL_REGISTERS
+        movi    a0, PS_INTLEVEL_MASK
+        and     a3, a2, a0                 // get the current INTLEVEL
+        bgeui   a3, +PS_INTLEVEL_EXCM, 1f  // calculate max(INTLEVEL, XCHAL_EXCM_LEVEL) - 3 = XCHAL_EXCM_LEVEL
+        movi    a3, PS_INTLEVEL_EXCM
+        1:
+        movi    a0, PS_WOE       // clear EXCM, enable window overflow, set new INTLEVEL
+        or      a3, a3, a0
+        wsr     a3, ps
+        rsr     a0, EPC1
+
+        addmi   sp,  sp, +XT_STK_FRMSZ   // go back to spill register region
+        SPILL_REGISTERS
+        addmi   sp,  sp, -XT_STK_FRMSZ   // return the current stack pointer
+
+        wsr     a2, PS                   //  restore to the value at entry
+        rsync
+        wsr     a0, EPC1
+
+        l32i    a0,  sp, +XT_STK_TMP
+        ",
+    "
+        ret
+        ",
+},
+);
+
+cfg_global_asm!(
+{
+    "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global restore_context
+        restore_context:
         l32i    a3,  sp, +XT_STK_SAR
         wsr     a3,  SAR
         ",
-        #[cfg(XCHAL_HAVE_LOOPS)]
-        "
+    #[cfg(XCHAL_HAVE_LOOPS)]
+    "
         // Loop Option
         l32i    a3,  sp, +XT_STK_LBEG
         wsr     a3,  LBEG
@@ -371,26 +370,26 @@ unsafe extern "C" fn restore_context() {
         l32i    a3,  sp, +XT_STK_LCOUNT
         wsr     a3,  LCOUNT
         ",
-        #[cfg(XCHAL_HAVE_THREADPTR)]
-        "
+    #[cfg(XCHAL_HAVE_THREADPTR)]
+    "
         // Thread Pointer Option
         l32i    a3, sp, +XT_STK_THREADPTR
         wur     a3, threadptr
         ",
-        #[cfg(XCHAL_HAVE_S32C1I)]
-        "
+    #[cfg(XCHAL_HAVE_S32C1I)]
+    "
         // Conditional Store Option
         l32i    a3, sp, +XT_STK_SCOMPARE1
         wsr     a3, scompare1
         ",
-        #[cfg(XCHAL_HAVE_BOOLEANS)]
-        "
+    #[cfg(XCHAL_HAVE_BOOLEANS)]
+    "
         // Boolean Option
         l32i    a3, sp, +XT_STK_BR
         wsr     a3, br
         ",
-        #[cfg(XCHAL_HAVE_MAC16)]
-        "
+    #[cfg(XCHAL_HAVE_MAC16)]
+    "
         // MAC16 Option
         l32i    a3, sp, +XT_STK_ACCLO
         wsr     a3, acclo
@@ -405,8 +404,8 @@ unsafe extern "C" fn restore_context() {
         l32i    a3, sp, +XT_STK_M3
         wsr     a3, m3
         ",
-        #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_DFP_ACCEL))]
-        "
+    #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_DFP_ACCEL))]
+    "
         // Double Precision Accelerator Option
         l32i    a3, sp, +XT_STK_F64R_LO_CPENABLE
         wur     a3, f64r_lo
@@ -415,8 +414,8 @@ unsafe extern "C" fn restore_context() {
         l32i    a3, sp, +XT_STK_F64S
         wur     a3, f64s
         ",
-        #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_FP))]
-        "
+    #[cfg(all(feature = "float-save-restore", XCHAL_HAVE_FP))]
+    "
         // Coprocessor Option
         l32i    a3, sp, +XT_STK_FCR
         wur     a3, fcr
@@ -439,14 +438,14 @@ unsafe extern "C" fn restore_context() {
         lsi     f14, sp, +XT_STK_F14
         lsi     f15, sp, +XT_STK_F15
         ",
-        #[cfg(all(XCHAL_HAVE_CP, not(feature = "float-save-restore")))]
-        "
+    #[cfg(all(XCHAL_HAVE_CP, not(feature = "float-save-restore")))]
+    "
         /* Restore coprocessor state after ISR */
         l32i    a3, sp, +XT_STK_F64R_LO_CPENABLE
         wsr     a3,  CPENABLE
         rsync
         ",
-        "
+    "
         // general registers
         l32i    a2,  sp, +XT_STK_A2
         l32i    a3,  sp, +XT_STK_A3
@@ -464,9 +463,8 @@ unsafe extern "C" fn restore_context() {
         l32i    a15, sp, +XT_STK_A15
         ret
         ",
-    },
-    );
-}
+},
+);
 
 global_asm!(
     r#"
@@ -495,60 +493,59 @@ global_asm!(
     "#
 );
 
-/// Handle Other Exceptions or Level 1 interrupt by storing full context and
-/// then calling regular function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE1
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_exception() {
-    naked_asm!(
+// Handle Other Exceptions or Level 1 interrupt by storing full context and
+// then calling regular function
+//
+// # Input:
+//    * A0 stored in EXCSAVE1
+global_asm!(
+    "
+    .section .rwtext, \"ax\"
+    .align 4
+    .global __default_naked_exception
+    __default_naked_exception:
+    SAVE_CONTEXT 1
+
+    movi    a0, (PS_INTLEVEL_EXCM | PS_WOE)
+    wsr     a0, PS
+    rsync
+
+    l32i    a6, sp, +XT_STK_EXCCAUSE  // put cause in a6 = a2 in callee
+    beqi    a6, 4, .Level1Interrupt
+
+    mov     a7, sp                    // put address of save frame in a7=a3 in callee
+    call4   __exception               // call handler <= actual call!
+
+    j       .RestoreContext
+
+    .Level1Interrupt:
+    movi    a0, (1 | PS_WOE)          // set PS.INTLEVEL accordingly
+    wsr     a0, PS
+    rsync
+
+    movi    a6, 1                     // put interrupt level in a6 = a2 in callee
+    mov     a7, sp                    // put address of save frame in a7=a3 in callee
+    call4   __level_1_interrupt       // call handler <= actual call!
+
+    .RestoreContext:
+    RESTORE_CONTEXT 1
+
+    rfe                               // PS.EXCM is cleared
+    ",
+);
+
+// Handle Double Exceptions by storing full context and then calling regular
+// function Double exceptions are not a normal occurrence. They indicate a bug
+// of some kind.
+//
+// # Input:
+//    * A0 stored in EXCSAVE1
+global_asm!(
         "
-        SAVE_CONTEXT 1
-
-        movi    a0, (PS_INTLEVEL_EXCM | PS_WOE)
-        wsr     a0, PS
-        rsync
-
-        l32i    a6, sp, +XT_STK_EXCCAUSE  // put cause in a6 = a2 in callee
-        beqi    a6, 4, .Level1Interrupt
-
-        mov     a7, sp                    // put address of save frame in a7=a3 in callee
-        call4   __exception               // call handler <= actual call!
-
-        j       .RestoreContext
-
-        .Level1Interrupt:
-        movi    a0, (1 | PS_WOE)          // set PS.INTLEVEL accordingly
-        wsr     a0, PS
-        rsync
-
-        movi    a6, 1                     // put interrupt level in a6 = a2 in callee
-        mov     a7, sp                    // put address of save frame in a7=a3 in callee
-        call4   __level_1_interrupt       // call handler <= actual call!
-
-        .RestoreContext:
-        RESTORE_CONTEXT 1
-
-        rfe                               // PS.EXCM is cleared
-        ",
-    )
-}
-
-/// Handle Double Exceptions by storing full context and then calling regular
-/// function Double exceptions are not a normal occurrence. They indicate a bug
-/// of some kind.
-///
-/// # Input:
-///    * A0 stored in EXCSAVE1
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_double_exception() {
-    naked_asm!(
-        "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global __default_naked_double_exception
+        __default_naked_double_exception:
         mov     a0, a1                     // save a1/sp
         addmi   sp, sp, -XT_STK_FRMSZ      // only allow multiple of 256
 
@@ -592,8 +589,7 @@ unsafe extern "C" fn __default_naked_double_exception() {
 
         rfde
         ",
-    )
-}
+    );
 
 global_asm!(
     r#"
@@ -615,74 +611,98 @@ global_asm!(
 "#
 );
 
-/// Handle Level 2 Interrupt by storing full context and then calling regular
-/// function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE2
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_level_2_interrupt() {
-    naked_asm!("HANDLE_INTERRUPT_LEVEL 2");
-}
+// Handle Level 2 Interrupt by storing full context and then calling regular
+// function
+//
+// # Input:
+//    * A0 stored in EXCSAVE2
+global_asm!(
+    "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global __default_naked_level_2_interrupt
+        __default_naked_level_2_interrupt:
+        HANDLE_INTERRUPT_LEVEL 2
+    "
+);
 
-/// Handle Level 3 Interrupt by storing full context and then calling regular
-/// function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE3
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_level_3_interrupt() {
-    naked_asm!("HANDLE_INTERRUPT_LEVEL 3");
-}
+// Handle Level 3 Interrupt by storing full context and then calling regular
+// function
+//
+// # Input:
+//    * A0 stored in EXCSAVE3
+global_asm!(
+    "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global __default_naked_level_3_interrupt
+        __default_naked_level_3_interrupt:
+        HANDLE_INTERRUPT_LEVEL 3
+    "
+);
 
-/// Handle Level 4 Interrupt by storing full context and then calling regular
-/// function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE4
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_level_4_interrupt() {
-    naked_asm!("HANDLE_INTERRUPT_LEVEL 4");
-}
+// Handle Level 4 Interrupt by storing full context and then calling regular
+// function
+//
+// # Input:
+//    * A0 stored in EXCSAVE4
+global_asm!(
+    "
+        .section .rwtext, \"ax\"
+.align 4
+        .global __default_naked_level_4_interrupt
+        __default_naked_level_4_interrupt:
+        HANDLE_INTERRUPT_LEVEL 4
+    "
+);
 
-/// Handle Level 5 Interrupt by storing full context and then calling regular
-/// function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE5
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_level_5_interrupt() {
-    naked_asm!("HANDLE_INTERRUPT_LEVEL 5");
-}
+// Handle Level 5 Interrupt by storing full context and then calling regular
+// function
+//
+// # Input:
+//    * A0 stored in EXCSAVE5
+global_asm!(
+    "
+        .section .rwtext, \"ax\"
+.align 4
+        .global __default_naked_level_5_interrupt
+        __default_naked_level_5_interrupt:
+        HANDLE_INTERRUPT_LEVEL 5
+    "
+);
 
-/// Handle Level 6 (=Debug) Interrupt by storing full context and then calling
-/// regular function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE6
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_level_6_interrupt() {
-    naked_asm!("HANDLE_INTERRUPT_LEVEL 6");
-}
+// Handle Level 6 (=Debug) Interrupt by storing full context and then calling
+// regular function
+//
+// # Input:
+//    * A0 stored in EXCSAVE6
+global_asm!(
+    "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global __default_naked_level_6_interrupt
+        __default_naked_level_6_interrupt:
+        HANDLE_INTERRUPT_LEVEL 6
+    "
+);
 
-/// Handle Level 7 (=NMI) Interrupt by storing full context and then calling
-/// regular function
-///
-/// # Input:
-///    * A0 stored in EXCSAVE7
-#[naked]
-#[no_mangle]
-#[link_section = ".rwtext"]
-unsafe extern "C" fn __default_naked_level_7_interrupt() {
-    naked_asm!("HANDLE_INTERRUPT_LEVEL 7");
-}
+// Handle Level 7 (=NMI) Interrupt by storing full context and then calling
+// regular function
+//
+// # Input:
+//    * A0 stored in EXCSAVE7
+global_asm!(
+    "
+        .section .rwtext, \"ax\"
+        .align 4
+        .global __default_naked_level_7_interrupt
+        __default_naked_level_7_interrupt:
+        HANDLE_INTERRUPT_LEVEL 7
+    "
+);
+
+global_asm!(
+    "
+    .lto_discard save_context restore_context __default_naked_exception __default_naked_double_exception __default_naked_level_2_interrupt __default_naked_level_3_interrupt __default_naked_level_4_interrupt __default_naked_level_5_interrupt __default_naked_level_6_interrupt __default_naked_level_7_interrupt
+    "
+);
