@@ -21,6 +21,8 @@ rustflags = [
   "-C", "link-arg=-Wl,-Tlinkall.x",
   "-C", "link-arg=-nostartfiles",
 
+  "--emit", "llvm-ir,asm",
+
   # LLD
   # "-C", "link-arg=-Tlinkall.x",
   # "-C", "linker=rust-lld",
