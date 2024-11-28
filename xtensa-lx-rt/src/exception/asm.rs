@@ -684,3 +684,221 @@ __default_naked_level_7_interrupt:
     .size .Ldefault_naked_level_7_interrupt_start, .Ldefault_naked_level_7_interrupt_end
 "
 );
+
+// Raw vector handlers
+//
+// The interrupt handlers all use special return instructions.
+// rust still generates a ret.w instruction, which will never be reached.
+// generation of the ret.w can be prevented by using
+// core::intrinsics::unreachable, but then a break 15,1 will be generated (which
+// takes 3 bytes instead of 2) or a 'loop {}', but then a jump to own address
+// will be generated which is also 3 bytes. No way found yet to prevent this
+// generation altogether.
+global_asm!(
+    "
+    .section .WindowOverflow8.text,\"ax\",@progbits
+    .global _WindowOverflow8
+    .p2align 2
+    .type _WindowOverflow8,@function
+_WindowOverflow8:
+        s32e    a0, a9, -16
+        l32e    a0, a1, -12
+
+        s32e    a1, a9, -12
+        s32e    a2, a9,  -8
+        s32e    a3, a9,  -4
+        s32e    a4, a0, -32
+        s32e    a5, a0, -28
+        s32e    a6, a0, -24
+        s32e    a7, a0, -20
+        rfwo
+    
+    .section .WindowUnderflow8.text,\"ax\",@progbits
+    .global _WindowUnderflow8
+    .p2align 2
+    .type _WindowUnderflow8,@function
+_WindowUnderflow8:
+        l32e    a0, a9, -16
+        l32e    a1, a9, -12
+        l32e    a2, a9,  -8
+        l32e    a7, a1, -12
+
+        l32e    a3, a9,  -4
+        l32e    a4, a7, -32
+        l32e    a5, a7, -28
+        l32e    a6, a7, -24
+        l32e    a7, a7, -20
+        rfwu
+
+    .section .WindowOverflow12.text,\"ax\",@progbits
+    .global _WindowOverflow12
+    .p2align 2
+    .type _WindowOverflow12,@function
+_WindowOverflow12:
+        s32e    a0,  a13, -16
+        l32e    a0,  a1,  -12
+
+        s32e    a1,  a13, -12
+        s32e    a2,  a13,  -8
+        s32e    a3,  a13,  -4
+        s32e    a4,  a0,  -48
+        s32e    a5,  a0,  -44
+        s32e    a6,  a0,  -40
+        s32e    a7,  a0,  -36
+        s32e    a8,  a0,  -32
+        s32e    a9,  a0,  -28
+        s32e    a10, a0,  -24
+        s32e    a11, a0,  -20
+        rfwo
+
+    .section .WindowUnderflow12.text,\"ax\",@progbits
+    .global _WindowUnderflow12
+    .p2align 2
+    .type _WindowUnderflow12,@function
+_WindowUnderflow12:
+        l32e    a0,  a13, -16
+        l32e    a1,  a13, -12
+        l32e    a2,  a13,  -8
+        l32e    a11, a1,  -12
+
+        l32e    a3,  a13,  -4
+        l32e    a4,  a11, -48
+        l32e    a5,  a11, -44
+        l32e    a6,  a11, -40
+        l32e    a7,  a11, -36
+        l32e    a8,  a11, -32
+        l32e    a9,  a11, -28
+        l32e    a10, a11, -24
+        l32e    a11, a11, -20
+        rfwu
+
+    .section .WindowOverflow4.text,\"ax\",@progbits
+    .global _WindowOverflow4
+    .p2align 2
+    .type _WindowOverflow4,@function
+_WindowOverflow4:
+        s32e    a0, a5, -16
+        s32e    a1, a5, -12
+        s32e    a2, a5,  -8
+        s32e    a3, a5,  -4
+        rfwo
+
+    .section .WindowUnderflow4.text,\"ax\",@progbits
+    .global _WindowUnderflow4
+    .p2align 2
+    .type _WindowUnderflow4,@function
+_WindowUnderflow4:
+        l32e    a0, a5, -16
+        l32e    a1, a5, -12
+        l32e    a2, a5,  -8
+        l32e    a3, a5,  -4
+        rfwu
+
+        // inline the _AllocAException saves on the ret.w for WindowUnderflow4
+        // this makes that it just fits, which is needed for the bbci instructions
+
+        .align 4
+        _AllocAException:
+        rsr     a0, WINDOWBASE  // grab WINDOWBASE before rotw changes it
+        rotw    -1              // WINDOWBASE goes to a4, new a0-a3 are scratch
+        rsr     a2, PS
+        extui   a3, a2, 8, 4    // XCHAL_PS_OWB_SHIFT, XCHAL_PS_OWB_BITS
+        xor     a3, a3, a4      // bits changed from old to current windowbase
+        rsr     a4, EXCSAVE1    // restore original a0 (now in a4)
+        slli    a3, a3, 8       // XCHAL_PS_OWB_SHIFT
+        xor     a2, a2, a3      // flip changed bits in old window base
+        wsr     a2, PS          // update PS.OWB to new window base
+        rsync
+
+        bbci    a4, 31, _WindowUnderflow4
+        rotw    -1              // original a0 goes to a8
+        bbci    a8, 30, _WindowUnderflow8
+        rotw    -1
+        j               _WindowUnderflow12
+
+    .section .KernelExceptionVector.text,\"ax\",@progbits
+    .global _KernelExceptionVector
+    .p2align 2
+    .type _KernelExceptionVector,@function
+_KernelExceptionVector:
+        wsr a0, EXCSAVE1 // preserve a0
+        rsr a0, EXCCAUSE // get exception cause
+
+        beqi a0, 5, .AllocAException
+
+        call0 __naked_kernel_exception
+
+    .section .UserExceptionVector.text,\"ax\",@progbits
+    .global _UserExceptionVector
+    .p2align 2
+    .type _UserExceptionVector,@function
+_UserExceptionVector:
+        wsr a0, EXCSAVE1 // preserve a0
+        rsr a0, EXCCAUSE // get exception cause
+
+        beqi a0, 5, .AllocAException
+
+        call0 __naked_user_exception
+
+.AllocAException:
+        call0  _AllocAException
+
+    .section .DoubleExceptionVector.text,\"ax\",@progbits
+    .global _DoubleExceptionVector
+    .p2align 2
+    .type _DoubleExceptionVector,@function
+_DoubleExceptionVector:
+        wsr a0, EXCSAVE1                // preserve a0 (EXCSAVE1 can be reused as long as there
+                                        // is no double exception in the first exception until
+                                        // EXCSAVE1 is stored to the stack.)
+        call0 __naked_double_exception  // used as long jump
+
+    .section .Level2InterruptVector.text,\"ax\",@progbits
+    .global _Level2InterruptVector
+    .p2align 2
+    .type _Level2InterruptVector,@function
+_Level2InterruptVector:
+        wsr a0, EXCSAVE2 // preserve a0
+        call0 __naked_level_2_interrupt     // used as long jump
+
+    .section .Level3InterruptVector.text,\"ax\",@progbits
+    .global _Level3InterruptVector
+    .p2align 2
+    .type _Level3InterruptVector,@function
+_Level3InterruptVector:
+        wsr a0, EXCSAVE3 // preserve a0
+        call0 __naked_level_3_interrupt     // used as long jump
+
+    .section .Level4InterruptVector.text,\"ax\",@progbits
+    .global _Level4InterruptVector
+    .p2align 2
+    .type _Level4InterruptVector,@function
+_Level4InterruptVector:
+        wsr a0, EXCSAVE4 // preserve a0
+        call0 __naked_level_4_interrupt     // used as long jump
+
+    .section .Level5InterruptVector.text,\"ax\",@progbits
+    .global _Level5InterruptVector
+    .p2align 2
+    .type _Level5InterruptVector,@function
+_Level5InterruptVector:
+        wsr a0, EXCSAVE5 // preserve a0
+        call0 __naked_level_5_interrupt     // used as long jump
+
+    .section .DebugExceptionVector.text,\"ax\",@progbits
+    .global _Level6InterruptVector
+    .p2align 2
+    .type _Level6InterruptVector,@function
+_Level6InterruptVector:
+        wsr a0, EXCSAVE6 // preserve a0
+        call0 __naked_level_6_interrupt     // used as long jump
+
+    .section .NMIExceptionVector.text,\"ax\",@progbits
+    .global _Level7InterruptVector
+    .p2align 2
+    .type _Level7InterruptVector,@function
+_Level7InterruptVector:
+        wsr a0, EXCSAVE7 // preserve a0
+        call0 __naked_level_7_interrupt     // used as long jump
+    "
+);
