@@ -1,4 +1,4 @@
-use core::arch::naked_asm;
+use core::arch::global_asm;
 
 use super::ExceptionCause;
 
@@ -171,149 +171,100 @@ extern "C" fn __default_double_exception(cause: ExceptionCause, save_frame: &Con
 // takes 3 bytes instead of 2) or a 'loop {}', but then a jump to own address
 // will be generated which is also 3 bytes. No way found yet to prevent this
 // generation altogether.
-
-#[naked]
-#[no_mangle]
-#[link_section = ".KernelExceptionVector.text"]
-unsafe extern "C" fn _KernelExceptionVector() {
-    naked_asm!(
-        "
-        wsr a0, EXCSAVE1 // preserve a0
-        rsr a0, EXCCAUSE // get exception cause
-
-        beqi a0, 5, .AllocAException
-
-        call0 __naked_kernel_exception
-        "
-    );
-}
-
-#[naked]
-#[no_mangle]
-#[link_section = ".UserExceptionVector.text"]
-unsafe extern "C" fn _UserExceptionVector() {
-    naked_asm!(
-        "
-        wsr a0, EXCSAVE1 // preserve a0
-        rsr a0, EXCCAUSE // get exception cause
-
-        beqi a0, 5, .AllocAException
-
-        call0 __naked_user_exception
-
-        .AllocAException:
-        call0  _AllocAException
-        "
-    );
-}
-
-#[naked]
-#[no_mangle]
-#[link_section = ".DoubleExceptionVector.text"]
-unsafe extern "C" fn _DoubleExceptionVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE1                   // preserve a0 (EXCSAVE1 can be reused as long as there
-                                       // is no double exception in the first exception until
-                                       // EXCSAVE1 is stored to the stack.)
-    call0 __naked_double_exception     // used as long jump
+global_asm!(
     "
-    );
-}
+    .section .WindowOverflow8.text,\"ax\",@progbits
+    .global _WindowOverflow8
+    .p2align 2
+    .type _WindowOverflow8,@function
+_WindowOverflow8:
+        s32e    a0, a9, -16
+        l32e    a0, a1, -12
 
-#[naked]
-#[no_mangle]
-#[link_section = ".Level2InterruptVector.text"]
-unsafe extern "C" fn _Level2InterruptVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE2 // preserve a0
-    call0 __naked_level_2_interrupt     // used as long jump
-    "
-    );
-}
+        s32e    a1, a9, -12
+        s32e    a2, a9,  -8
+        s32e    a3, a9,  -4
+        s32e    a4, a0, -32
+        s32e    a5, a0, -28
+        s32e    a6, a0, -24
+        s32e    a7, a0, -20
+        rfwo
+    
+    .section .WindowUnderflow8.text,\"ax\",@progbits
+    .global _WindowUnderflow8
+    .p2align 2
+    .type _WindowUnderflow8,@function
+_WindowUnderflow8:
+        l32e    a0, a9, -16
+        l32e    a1, a9, -12
+        l32e    a2, a9,  -8
+        l32e    a7, a1, -12
 
-#[naked]
-#[no_mangle]
-#[link_section = ".Level3InterruptVector.text"]
-unsafe extern "C" fn _Level3InterruptVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE3 // preserve a0
-    call0 __naked_level_3_interrupt     // used as long jump
-    "
-    );
-}
+        l32e    a3, a9,  -4
+        l32e    a4, a7, -32
+        l32e    a5, a7, -28
+        l32e    a6, a7, -24
+        l32e    a7, a7, -20
+        rfwu
 
-#[naked]
-#[no_mangle]
-#[link_section = ".Level4InterruptVector.text"]
-unsafe extern "C" fn _Level4InterruptVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE4 // preserve a0
-    call0 __naked_level_4_interrupt     // used as long jump
-    "
-    );
-}
+    .section .WindowOverflow12.text,\"ax\",@progbits
+    .global _WindowOverflow12
+    .p2align 2
+    .type _WindowOverflow12,@function
+_WindowOverflow12:
+        s32e    a0,  a13, -16
+        l32e    a0,  a1,  -12
 
-#[naked]
-#[no_mangle]
-#[link_section = ".Level5InterruptVector.text"]
-unsafe extern "C" fn _Level5InterruptVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE5 // preserve a0
-    call0 __naked_level_5_interrupt     // used as long jump
-    "
-    );
-}
+        s32e    a1,  a13, -12
+        s32e    a2,  a13,  -8
+        s32e    a3,  a13,  -4
+        s32e    a4,  a0,  -48
+        s32e    a5,  a0,  -44
+        s32e    a6,  a0,  -40
+        s32e    a7,  a0,  -36
+        s32e    a8,  a0,  -32
+        s32e    a9,  a0,  -28
+        s32e    a10, a0,  -24
+        s32e    a11, a0,  -20
+        rfwo
 
-#[naked]
-#[no_mangle]
-#[link_section = ".DebugExceptionVector.text"]
-unsafe extern "C" fn _Level6InterruptVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE6 // preserve a0
-    call0 __naked_level_6_interrupt     // used as long jump
-    "
-    );
-}
+    .section .WindowUnderflow12.text,\"ax\",@progbits
+    .global _WindowUnderflow12
+    .p2align 2
+    .type _WindowUnderflow12,@function
+_WindowUnderflow12:
+        l32e    a0,  a13, -16
+        l32e    a1,  a13, -12
+        l32e    a2,  a13,  -8
+        l32e    a11, a1,  -12
 
-#[naked]
-#[no_mangle]
-#[link_section = ".NMIExceptionVector.text"]
-unsafe extern "C" fn _Level7InterruptVector() {
-    naked_asm!(
-        "
-    wsr a0, EXCSAVE7 // preserve a0
-    call0 __naked_level_7_interrupt     // used as long jump
-    "
-    );
-}
+        l32e    a3,  a13,  -4
+        l32e    a4,  a11, -48
+        l32e    a5,  a11, -44
+        l32e    a6,  a11, -40
+        l32e    a7,  a11, -36
+        l32e    a8,  a11, -32
+        l32e    a9,  a11, -28
+        l32e    a10, a11, -24
+        l32e    a11, a11, -20
+        rfwu
 
-#[naked]
-#[no_mangle]
-#[link_section = ".WindowOverflow4.text"]
-unsafe extern "C" fn _WindowOverflow4() {
-    naked_asm!(
-        "
+    .section .WindowOverflow4.text,\"ax\",@progbits
+    .global _WindowOverflow4
+    .p2align 2
+    .type _WindowOverflow4,@function
+_WindowOverflow4:
         s32e    a0, a5, -16
         s32e    a1, a5, -12
         s32e    a2, a5,  -8
         s32e    a3, a5,  -4
         rfwo
-    "
-    );
-}
 
-#[naked]
-#[no_mangle]
-#[link_section = ".WindowUnderflow4.text"]
-unsafe extern "C" fn _WindowUnderflow4() {
-    naked_asm!(
-        "
+    .section .WindowUnderflow4.text,\"ax\",@progbits
+    .global _WindowUnderflow4
+    .p2align 2
+    .type _WindowUnderflow4,@function
+_WindowUnderflow4:
         l32e    a0, a5, -16
         l32e    a1, a5, -12
         l32e    a2, a5,  -8
@@ -341,98 +292,90 @@ unsafe extern "C" fn _WindowUnderflow4() {
         bbci    a8, 30, _WindowUnderflow8
         rotw    -1
         j               _WindowUnderflow12
-        "
-    );
-}
 
-#[naked]
-#[no_mangle]
-#[link_section = ".WindowOverflow8.text"]
-unsafe extern "C" fn _WindowOverflow8() {
-    naked_asm!(
-        "
-        s32e    a0, a9, -16
-        l32e    a0, a1, -12
+    .section .KernelExceptionVector.text,\"ax\",@progbits
+    .global _KernelExceptionVector
+    .p2align 2
+    .type _KernelExceptionVector,@function
+_KernelExceptionVector:
+        wsr a0, EXCSAVE1 // preserve a0
+        rsr a0, EXCCAUSE // get exception cause
 
-        s32e    a1, a9, -12
-        s32e    a2, a9,  -8
-        s32e    a3, a9,  -4
-        s32e    a4, a0, -32
-        s32e    a5, a0, -28
-        s32e    a6, a0, -24
-        s32e    a7, a0, -20
-        rfwo
+        beqi a0, 5, .AllocAException
+
+        call0 __naked_kernel_exception
+
+    .section .UserExceptionVector.text,\"ax\",@progbits
+    .global _UserExceptionVector
+    .p2align 2
+    .type _UserExceptionVector,@function
+_UserExceptionVector:
+        wsr a0, EXCSAVE1 // preserve a0
+        rsr a0, EXCCAUSE // get exception cause
+
+        beqi a0, 5, .AllocAException
+
+        call0 __naked_user_exception
+
+.AllocAException:
+        call0  _AllocAException
+
+    .section .DoubleExceptionVector.text,\"ax\",@progbits
+    .global _DoubleExceptionVector
+    .p2align 2
+    .type _DoubleExceptionVector,@function
+_DoubleExceptionVector:
+        wsr a0, EXCSAVE1                // preserve a0 (EXCSAVE1 can be reused as long as there
+                                        // is no double exception in the first exception until
+                                        // EXCSAVE1 is stored to the stack.)
+        call0 __naked_double_exception  // used as long jump
+
+    .section .Level2InterruptVector.text,\"ax\",@progbits
+    .global _Level2InterruptVector
+    .p2align 2
+    .type _Level2InterruptVector,@function
+_Level2InterruptVector:
+        wsr a0, EXCSAVE2 // preserve a0
+        call0 __naked_level_2_interrupt     // used as long jump
+
+    .section .Level3InterruptVector.text,\"ax\",@progbits
+    .global _Level3InterruptVector
+    .p2align 2
+    .type _Level3InterruptVector,@function
+_Level3InterruptVector:
+        wsr a0, EXCSAVE3 // preserve a0
+        call0 __naked_level_3_interrupt     // used as long jump
+
+    .section .Level4InterruptVector.text,\"ax\",@progbits
+    .global _Level4InterruptVector
+    .p2align 2
+    .type _Level4InterruptVector,@function
+_Level4InterruptVector:
+        wsr a0, EXCSAVE4 // preserve a0
+        call0 __naked_level_4_interrupt     // used as long jump
+
+    .section .Level5InterruptVector.text,\"ax\",@progbits
+    .global _Level5InterruptVector
+    .p2align 2
+    .type _Level5InterruptVector,@function
+_Level5InterruptVector:
+        wsr a0, EXCSAVE5 // preserve a0
+        call0 __naked_level_5_interrupt     // used as long jump
+
+    .section .DebugExceptionVector.text,\"ax\",@progbits
+    .global _Level6InterruptVector
+    .p2align 2
+    .type _Level6InterruptVector,@function
+_Level6InterruptVector:
+        wsr a0, EXCSAVE6 // preserve a0
+        call0 __naked_level_6_interrupt     // used as long jump
+
+    .section .NMIExceptionVector.text,\"ax\",@progbits
+    .global _Level7InterruptVector
+    .p2align 2
+    .type _Level7InterruptVector,@function
+_Level7InterruptVector:
+        wsr a0, EXCSAVE7 // preserve a0
+        call0 __naked_level_7_interrupt     // used as long jump
     "
-    );
-}
-
-#[naked]
-#[no_mangle]
-#[link_section = ".WindowUnderflow8.text"]
-unsafe extern "C" fn _WindowUnderflow8() {
-    naked_asm!(
-        "
-        l32e    a0, a9, -16
-        l32e    a1, a9, -12
-        l32e    a2, a9,  -8
-        l32e    a7, a1, -12
-
-        l32e    a3, a9,  -4
-        l32e    a4, a7, -32
-        l32e    a5, a7, -28
-        l32e    a6, a7, -24
-        l32e    a7, a7, -20
-        rfwu
-    "
-    );
-}
-
-#[naked]
-#[no_mangle]
-#[link_section = ".WindowOverflow12.text"]
-unsafe extern "C" fn _WindowOverflow12() {
-    naked_asm!(
-        "
-        s32e    a0,  a13, -16
-        l32e    a0,  a1,  -12
-
-        s32e    a1,  a13, -12
-        s32e    a2,  a13,  -8
-        s32e    a3,  a13,  -4
-        s32e    a4,  a0,  -48
-        s32e    a5,  a0,  -44
-        s32e    a6,  a0,  -40
-        s32e    a7,  a0,  -36
-        s32e    a8,  a0,  -32
-        s32e    a9,  a0,  -28
-        s32e    a10, a0,  -24
-        s32e    a11, a0,  -20
-        rfwo
-    "
-    );
-}
-
-#[naked]
-#[no_mangle]
-#[link_section = ".WindowUnderflow12.text"]
-unsafe extern "C" fn _WindowUnderflow12() {
-    naked_asm!(
-        "
-        l32e    a0,  a13, -16
-        l32e    a1,  a13, -12
-        l32e    a2,  a13,  -8
-        l32e    a11, a1,  -12
-
-        l32e    a3,  a13,  -4
-        l32e    a4,  a11, -48
-        l32e    a5,  a11, -44
-        l32e    a6,  a11, -40
-        l32e    a7,  a11, -36
-        l32e    a8,  a11, -32
-        l32e    a9,  a11, -28
-        l32e    a10, a11, -24
-        l32e    a11, a11, -20
-        rfwu
-    "
-    );
-}
+);

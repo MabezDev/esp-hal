@@ -2,12 +2,6 @@ use core::arch::global_asm;
 
 use crate::cfg_global_asm;
 
-global_asm!(
-    "
-    .lto_discard save_context restore_context __default_naked_exception __default_naked_double_exception __default_naked_level_2_interrupt __default_naked_level_3_interrupt __default_naked_level_4_interrupt __default_naked_level_5_interrupt __default_naked_level_6_interrupt __default_naked_level_7_interrupt
-    "
-);
-
 // We could cfg symbols away and reduce frame size depending on features enabled
 // i.e the frame size is a fixed size based on all the features right now
 // we know at compile time if a target has loops for example, if it doesn't
@@ -226,10 +220,12 @@ cfg_global_asm!(
     //     A1 is the stack pointer
     //     A3, A9 are used as scratch registers
     //     EPC1 is changed
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global save_context
-    save_context:
+    .p2align 2
+    .type save_context,@function
+save_context:
+.Lsave_context_start:
     s32i    a2,  sp, +XT_STK_A2
     s32i    a3,  sp, +XT_STK_A3
     s32i    a4,  sp, +XT_STK_A4
@@ -377,12 +373,15 @@ cfg_global_asm!(
     ",
     "
     ret
+.Lsave_context_end:
+    .size .Lsave_context_start, .Lsave_context_end
 
-
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global restore_context
-    restore_context:
+    .p2align 2
+    .type restore_context,@function
+restore_context:
+.Lrestore_context_start:
     l32i    a3,  sp, +XT_STK_SAR
     wsr     a3,  SAR
     ",
@@ -488,6 +487,8 @@ cfg_global_asm!(
     l32i    a14, sp, +XT_STK_A14
     l32i    a15, sp, +XT_STK_A15
     ret
+.Lrestore_context_end:
+    .size .Lrestore_context_start, .Lrestore_context_end
     ",
 );
 
@@ -499,10 +500,12 @@ global_asm!(
     // # Input:
     //    * A0 stored in EXCSAVE1
 
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_exception
-    __default_naked_exception:
+    .p2align 2
+    .type __default_naked_exception,@function
+__default_naked_exception:
+.Ldefault_naked_exception_start:
     SAVE_CONTEXT 1
 
     movi    a0, (PS_INTLEVEL_EXCM | PS_WOE)
@@ -517,7 +520,7 @@ global_asm!(
 
     j       .RestoreContext
 
-    .Level1Interrupt:
+.Level1Interrupt:
     movi    a0, (1 | PS_WOE)          // set PS.INTLEVEL accordingly
     wsr     a0, PS
     rsync
@@ -526,10 +529,12 @@ global_asm!(
     mov     a7, sp                    // put address of save frame in a7=a3 in callee
     call4   __level_1_interrupt       // call handler <= actual call!
 
-    .RestoreContext:
+.RestoreContext:
     RESTORE_CONTEXT 1
 
     rfe                               // PS.EXCM is cleared
+.Ldefault_naked_exception_end:
+    .size .Ldefault_naked_exception_start, .Ldefault_naked_exception_end
 
     // Handle Double Exceptions by storing full context and then calling regular
     // function Double exceptions are not a normal occurrence. They indicate a bug
@@ -537,10 +542,12 @@ global_asm!(
     //
     // # Input:
     //    * A0 stored in EXCSAVE1
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_double_exception
-    __default_naked_double_exception:
+    .p2align 2
+    .type __default_naked_double_exception,@function
+__default_naked_double_exception:
+.Ldefault_double_naked_exception_start:
     mov     a0, a1                     // save a1/sp
     addmi   sp, sp, -XT_STK_FRMSZ      // only allow multiple of 256
 
@@ -583,71 +590,97 @@ global_asm!(
     rsync                             // ensure PS and EPC written
 
     rfde
+.Ldefault_double_naked_exception_end:
+    .size .Ldefault_double_naked_exception_start, .Ldefault_double_naked_exception_end
 
     // Handle Level 2 Interrupt by storing full context and then calling regular
     // function
     //
     // # Input:
     //    * A0 stored in EXCSAVE2
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_level_2_interrupt
-    __default_naked_level_2_interrupt:
+    .p2align 2
+    .type __default_naked_level_2_interrupt,@function
+__default_naked_level_2_interrupt:
+.Ldefault_naked_level_2_interrupt_start:
     HANDLE_INTERRUPT_LEVEL 2
+.Ldefault_naked_level_2_interrupt_end:
+    .size .Ldefault_naked_level_2_interrupt_start, .Ldefault_naked_level_2_interrupt_end
 
     // Handle Level 3 Interrupt by storing full context and then calling regular
     // function
     //
     // # Input:
     //    * A0 stored in EXCSAVE3
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_level_3_interrupt
-    __default_naked_level_3_interrupt:
+    .p2align 2
+    .type __default_naked_level_3_interrupt,@function
+__default_naked_level_3_interrupt:
+.Ldefault_naked_level_3_interrupt_start:
     HANDLE_INTERRUPT_LEVEL 3
+.Ldefault_naked_level_3_interrupt_end:
+    .size .Ldefault_naked_level_3_interrupt_start, .Ldefault_naked_level_3_interrupt_end
 
     // Handle Level 4 Interrupt by storing full context and then calling regular
     // function
     //
     // # Input:
     //    * A0 stored in EXCSAVE4
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_level_4_interrupt
-    __default_naked_level_4_interrupt:
+    .p2align 2
+    .type __default_naked_level_4_interrupt,@function
+__default_naked_level_4_interrupt:
+.Ldefault_naked_level_4_interrupt_start:
     HANDLE_INTERRUPT_LEVEL 4
+.Ldefault_naked_level_4_interrupt_end:
+    .size .Ldefault_naked_level_4_interrupt_start, .Ldefault_naked_level_4_interrupt_end
 
     // Handle Level 5 Interrupt by storing full context and then calling regular
     // function
     //
     // # Input:
     //    * A0 stored in EXCSAVE5
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_level_5_interrupt
-    __default_naked_level_5_interrupt:
+    .p2align 2
+    .type __default_naked_level_5_interrupt,@function
+__default_naked_level_5_interrupt:
+.Ldefault_naked_level_5_interrupt_start:
     HANDLE_INTERRUPT_LEVEL 5
+.Ldefault_naked_level_5_interrupt_end:
+    .size .Ldefault_naked_level_5_interrupt_start, .Ldefault_naked_level_5_interrupt_end
 
     // Handle Level 6 (=Debug) Interrupt by storing full context and then calling
     // regular function
     //
     // # Input:
     //    * A0 stored in EXCSAVE6
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_level_6_interrupt
-    __default_naked_level_6_interrupt:
+    .p2align 2
+    .type __default_naked_level_6_interrupt,@function
+__default_naked_level_6_interrupt:
+.Ldefault_naked_level_6_interrupt_start:
     HANDLE_INTERRUPT_LEVEL 6
+.Ldefault_naked_level_6_interrupt_end:
+    .size .Ldefault_naked_level_6_interrupt_start, .Ldefault_naked_level_6_interrupt_end
 
     // Handle Level 7 (=NMI) Interrupt by storing full context and then calling
     // regular function
     //
     // # Input:
     //    * A0 stored in EXCSAVE7
-    .section .rwtext, \"ax\"
-    .align 4
+    .section .rwtext,\"ax\",@progbits
     .global __default_naked_level_7_interrupt
-    __default_naked_level_7_interrupt:
+    .p2align 2
+    .type __default_naked_level_7_interrupt,@function
+__default_naked_level_7_interrupt:
+.Ldefault_naked_level_7_interrupt_start:
     HANDLE_INTERRUPT_LEVEL 7
+.Ldefault_naked_level_7_interrupt_end:
+    .size .Ldefault_naked_level_7_interrupt_start, .Ldefault_naked_level_7_interrupt_end
 "
 );
