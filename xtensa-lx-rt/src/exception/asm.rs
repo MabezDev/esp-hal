@@ -18,8 +18,9 @@ use crate::cfg_global_asm;
 //
 // With the exception of XT_STK_TMP, the fields must be aligned with the
 // `Context` struct in context.rs
-cfg_global_asm!(
-    ".set XT_STK_PC,             0
+global_asm!(
+    "
+    .set XT_STK_PC,             0
     .set XT_STK_PS,              4
     .set XT_STK_A0,              8
     .equ XT_STK_A1,             12
@@ -202,7 +203,12 @@ cfg_global_asm!(
     rfi \\level
 
     .endm
+    "
+);
 
+
+cfg_global_asm!(
+    "
     // Save processor state to stack.
     //
     // *Must only be called with call0.*
