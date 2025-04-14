@@ -41,7 +41,7 @@ jobs:
         with:
           default: true
           ldproxy: false
-          version: 1.85.0.0
+          version: 1.86.0.0
 
       # TODO: we could build this once and download onto each runner
       # Build the `xtask` package using the latest commit, and copy the
