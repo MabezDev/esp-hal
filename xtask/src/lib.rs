@@ -227,6 +227,59 @@ impl Package {
     }
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Display,
+    EnumIter,
+    ValueEnum,
+    serde::Deserialize,
+    serde::Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum Stage {
+    _1,
+    _2,
+    _3,
+}
+
+impl Stage {
+    pub fn packages(&self) -> Vec<Package> {
+        use Package::*;
+        match self {
+            Stage::_1 => vec![
+                EspMetadata,
+                EspBuild,
+                EspConfig,
+                EspPrintln,
+                EspAlloc,
+                EspBacktrace,
+                EspRiscvRt,
+                EspStorage,
+                XtensaLx,
+                XtensaLxRt,
+                XtensaLxRtProcMacros,
+                EspBootloaderEspIdf,
+            ],
+            Stage::_2 => vec![EspHalProcmacros, EspHal],
+            Stage::_3 => vec![
+                EspLpHal,
+                EspWifi,
+                EspHalProcmacros,
+                EspHalEmbassy,
+                EspIeee802154,
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Display, ValueEnum)]
 #[strum(serialize_all = "lowercase")]
 pub enum Version {
