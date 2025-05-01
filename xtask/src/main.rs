@@ -26,6 +26,8 @@ enum Cli {
     /// Run-related subcommands
     #[clap(subcommand)]
     Run(Run),
+    #[clap(subcommand)]
+    Release(Release),
 
     /// Bump the version of the specified package(s).
     BumpVersion(BumpVersionArgs),
@@ -122,7 +124,6 @@ fn main() -> Result<()> {
     let target_path = Path::new("target");
 
     match Cli::parse() {
-        // Build-related subcommands:
         Cli::Build(build) => match build {
             Build::Documentation(args) => build_documentation(&workspace, args),
             Build::Examples(args) => examples(
@@ -137,15 +138,12 @@ fn main() -> Result<()> {
                 CargoAction::Build(target_path.join("tests")),
             ),
         },
-
-        // Run-related subcommands:
         Cli::Run(run) => match run {
             Run::DocTests(args) => run_doc_tests(&workspace, args),
             Run::Elfs(args) => run_elfs(args),
             Run::Example(args) => examples(&workspace, args, CargoAction::Run),
             Run::Tests(args) => tests(&workspace, args, CargoAction::Run),
         },
-
         Cli::BumpVersion(args) => bump_version(&workspace, args),
         Cli::Ci(args) => run_ci_checks(&workspace, args),
         Cli::FmtPackages(args) => fmt_packages(&workspace, args),
@@ -154,6 +152,9 @@ fn main() -> Result<()> {
         Cli::TagReleases(args) => tag_releases(&workspace, args),
         Cli::SemverCheck(args) => semver_checks(&workspace, args),
         Cli::CheckChangelog(args) => check_changelog(&workspace, &args.packages, args.normalize),
+        Cli::Release(release) => match release {
+            Release::Publish(args) => xtask::commands::release(&workspace, args),
+        },
     }
 }
 
@@ -295,38 +296,7 @@ fn lint_package(
 }
 
 fn publish(workspace: &Path, args: PublishArgs) -> Result<()> {
-    let package_name = args.package.to_string();
-    let package_path = xtask::windows_safe_path(&workspace.join(&package_name));
-
-    use Package::*;
-    let mut publish_args = match args.package {
-        Examples | HilTest | QaTest => {
-            bail!(
-                "Invalid package '{}' specified, this package should not be published!",
-                args.package
-            )
-        }
-
-        EspBacktrace | EspHal | EspHalEmbassy | EspIeee802154 | EspLpHal | EspPrintln
-        | EspRiscvRt | EspStorage | EspWifi | XtensaLxRt => vec!["--no-verify"],
-
-        _ => vec![],
-    };
-
-    if !args.no_dry_run {
-        publish_args.push("--dry-run");
-    }
-
-    let builder = CargoArgsBuilder::default()
-        .subcommand("publish")
-        .args(&publish_args);
-
-    let args = builder.build();
-    log::debug!("{args:#?}");
-
-    // Execute `cargo publish` command from the package root:
-    xtask::cargo::run(&args, &package_path)?;
-
+    xtask::publish(workspace, args.package, args.no_dry_run)?;
     Ok(())
 }
 

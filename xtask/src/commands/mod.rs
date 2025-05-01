@@ -12,6 +12,7 @@ mod bump_version;
 mod check_changelog;
 mod run;
 mod semver_check;
+mod release;
 
 // ----------------------------------------------------------------------------
 // Subcommand Arguments

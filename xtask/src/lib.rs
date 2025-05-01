@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, bail, Context, Result};
 use cargo::CargoAction;
 use clap::ValueEnum;
 use esp_metadata::{Chip, Config};
@@ -245,16 +245,16 @@ impl Package {
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Stage {
-    _1,
-    _2,
-    _3,
+    Stage1,
+    Stage2,
+    Stage3,
 }
 
 impl Stage {
     pub fn packages(&self) -> Vec<Package> {
         use Package::*;
         match self {
-            Stage::_1 => vec![
+            Stage::Stage1 => vec![
                 EspMetadata,
                 EspBuild,
                 EspConfig,
@@ -268,8 +268,8 @@ impl Stage {
                 XtensaLxRtProcMacros,
                 EspBootloaderEspIdf,
             ],
-            Stage::_2 => vec![EspHalProcmacros, EspHal],
-            Stage::_3 => vec![
+            Stage::Stage2 => vec![EspHalProcmacros, EspHal],
+            Stage::Stage3 => vec![
                 EspLpHal,
                 EspWifi,
                 EspHalProcmacros,
@@ -382,6 +382,108 @@ pub fn execute_app(
             cargo::run_with_env(&args, package_path, env_vars.clone(), false)?;
         }
     }
+
+    Ok(())
+}
+
+/// Bump the version of the specified package by the specified amount.
+pub fn bump_version(workspace: &Path, package: Package, amount: Version) -> Result<()> {
+    let manifest_path = workspace.join(package.to_string()).join("Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Could not read {}", manifest_path.display()))?;
+
+    let mut manifest = manifest.parse::<toml_edit::DocumentMut>()?;
+
+    let version = manifest["package"]["version"]
+        .to_string()
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    let prev_version = &version;
+
+    let mut version = semver::Version::parse(&version)?;
+    match amount {
+        Version::Major => {
+            version.major += 1;
+            version.minor = 0;
+            version.patch = 0;
+        }
+        Version::Minor => {
+            version.minor += 1;
+            version.patch = 0;
+        }
+        Version::Patch => {
+            version.patch += 1;
+        }
+    }
+
+    log::info!("Bumping version for package: {package} ({prev_version} -> {version})");
+
+    manifest["package"]["version"] = toml_edit::value(version.to_string());
+    fs::write(manifest_path, manifest.to_string())?;
+
+    for pkg in
+        Package::iter().filter(|p| ![package, Package::Examples, Package::HilTest].contains(p))
+    {
+        let manifest_path = workspace.join(pkg.to_string()).join("Cargo.toml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Could not read {}", manifest_path.display()))?;
+
+        let mut manifest = manifest.parse::<toml_edit::DocumentMut>()?;
+
+        if manifest["dependencies"]
+            .as_table()
+            .unwrap()
+            .contains_key(&package.to_string())
+        {
+            log::info!(
+                "  Bumping {package} version for package {pkg}: ({prev_version} -> {version})"
+            );
+
+            if let Some(table) = manifest["dependencies"].as_table_mut() {
+                table[&package.to_string()]["version"] = toml_edit::value(version.to_string());
+            }
+
+            fs::write(&manifest_path, manifest.to_string())
+                .with_context(|| format!("Could not write {}", manifest_path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn publish(workspace: &Path, package: Package, no_dry_run: bool) -> Result<()> {
+    let package_name = package.to_string();
+    let package_path = windows_safe_path(&workspace.join(&package_name));
+
+    use Package::*;
+    let mut publish_args = match package {
+        Examples | HilTest | QaTest => {
+            bail!(
+                "Invalid package '{}' specified, this package should not be published!",
+                package
+            )
+        }
+
+        EspBacktrace | EspHal | EspHalEmbassy | EspIeee802154 | EspLpHal | EspPrintln
+        | EspRiscvRt | EspStorage | EspWifi | XtensaLxRt => vec!["--no-verify"],
+
+        _ => vec![],
+    };
+
+    if !no_dry_run {
+        publish_args.push("--dry-run");
+    }
+
+    let builder = CargoArgsBuilder::default()
+        .subcommand("publish")
+        .args(&publish_args);
+
+    let args = builder.build();
+    log::debug!("{args:#?}");
+
+    // Execute `cargo publish` command from the package root:
+    cargo::run(&args, &package_path)?;
 
     Ok(())
 }
