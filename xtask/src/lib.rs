@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use cargo::CargoAction;
 use clap::ValueEnum;
 use esp_metadata::{Chip, Config};
@@ -245,6 +245,9 @@ impl Package {
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Stage {
+    /// Support crates used internally
+    Stage0,
+    /// The lowest level of crate that might be useful
     Stage1,
     Stage2,
     Stage3,
@@ -254,18 +257,20 @@ impl Stage {
     pub fn packages(&self) -> Vec<Package> {
         use Package::*;
         match self {
-            Stage::Stage1 => vec![
+            Stage::Stage0 => vec![
                 EspMetadata,
                 EspBuild,
                 EspConfig,
-                EspPrintln,
-                EspAlloc,
-                EspBacktrace,
-                EspRiscvRt,
-                EspStorage,
                 XtensaLx,
                 XtensaLxRt,
                 XtensaLxRtProcMacros,
+                EspRiscvRt,
+            ],
+            Stage::Stage1 => vec![
+                EspPrintln,
+                EspAlloc,
+                EspBacktrace,
+                EspStorage,
                 EspBootloaderEspIdf,
             ],
             Stage::Stage2 => vec![EspHalProcmacros, EspHal],
@@ -456,6 +461,8 @@ pub fn publish(workspace: &Path, package: Package, no_dry_run: bool) -> Result<(
     let package_name = package.to_string();
     let package_path = windows_safe_path(&workspace.join(&package_name));
 
+    let mut builder = CargoArgsBuilder::default().subcommand("publish");
+
     use Package::*;
     let mut publish_args = match package {
         Examples | HilTest | QaTest => {
@@ -466,18 +473,39 @@ pub fn publish(workspace: &Path, package: Package, no_dry_run: bool) -> Result<(
         }
 
         EspBacktrace | EspHal | EspHalEmbassy | EspIeee802154 | EspLpHal | EspPrintln
-        | EspRiscvRt | EspStorage | EspWifi | XtensaLxRt => vec!["--no-verify"],
+        | EspRiscvRt | EspStorage | EspWifi => {
+            let chip = Chip::Esp32c6;
+            vec![
+                format!("--target={}", chip.target()),
+                format!(
+                    "--features={}",
+                    package.feature_rules(&Config::for_chip(&chip)).join(",")
+                ),
+            ]
+        }
+        XtensaLxRt | XtensaLx => {
+            builder = builder.toolchain("esp");
+            builder.add_arg("-Zbuild-std=core,alloc");
+
+            vec![
+                format!("--target={}", Chip::Esp32s3.target()),
+                format!(
+                    "--features=esp32s3,{}",
+                    package
+                        .feature_rules(&Config::for_chip(&Chip::Esp32s3))
+                        .join(",")
+                ),
+            ]
+        }
 
         _ => vec![],
     };
 
     if !no_dry_run {
-        publish_args.push("--dry-run");
+        publish_args.push("--dry-run".to_owned());
     }
 
-    let builder = CargoArgsBuilder::default()
-        .subcommand("publish")
-        .args(&publish_args);
+    builder = builder.args(&publish_args);
 
     let args = builder.build();
     log::debug!("{args:#?}");
