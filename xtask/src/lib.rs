@@ -103,6 +103,12 @@ impl Package {
     /// this package.
     pub fn feature_rules(&self, config: &Config) -> Vec<String> {
         let mut features = vec![];
+
+        // Where possible, insert --features=chip
+        if self.has_chip_features() && config.name() != "" {
+            features.push(config.name())
+        }
+
         match self {
             Package::EspBacktrace => features.push("defmt".to_owned()),
             Package::EspConfig => features.push("build".to_owned()),
@@ -391,72 +397,6 @@ pub fn execute_app(
     Ok(())
 }
 
-/// Bump the version of the specified package by the specified amount.
-pub fn bump_version(workspace: &Path, package: Package, amount: Version) -> Result<()> {
-    let manifest_path = workspace.join(package.to_string()).join("Cargo.toml");
-    let manifest = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Could not read {}", manifest_path.display()))?;
-
-    let mut manifest = manifest.parse::<toml_edit::DocumentMut>()?;
-
-    let version = manifest["package"]["version"]
-        .to_string()
-        .trim()
-        .trim_matches('"')
-        .to_string();
-    let prev_version = &version;
-
-    let mut version = semver::Version::parse(&version)?;
-    match amount {
-        Version::Major => {
-            version.major += 1;
-            version.minor = 0;
-            version.patch = 0;
-        }
-        Version::Minor => {
-            version.minor += 1;
-            version.patch = 0;
-        }
-        Version::Patch => {
-            version.patch += 1;
-        }
-    }
-
-    log::info!("Bumping version for package: {package} ({prev_version} -> {version})");
-
-    manifest["package"]["version"] = toml_edit::value(version.to_string());
-    fs::write(manifest_path, manifest.to_string())?;
-
-    for pkg in
-        Package::iter().filter(|p| ![package, Package::Examples, Package::HilTest].contains(p))
-    {
-        let manifest_path = workspace.join(pkg.to_string()).join("Cargo.toml");
-        let manifest = fs::read_to_string(&manifest_path)
-            .with_context(|| format!("Could not read {}", manifest_path.display()))?;
-
-        let mut manifest = manifest.parse::<toml_edit::DocumentMut>()?;
-
-        if manifest["dependencies"]
-            .as_table()
-            .unwrap()
-            .contains_key(&package.to_string())
-        {
-            log::info!(
-                "  Bumping {package} version for package {pkg}: ({prev_version} -> {version})"
-            );
-
-            if let Some(table) = manifest["dependencies"].as_table_mut() {
-                table[&package.to_string()]["version"] = toml_edit::value(version.to_string());
-            }
-
-            fs::write(&manifest_path, manifest.to_string())
-                .with_context(|| format!("Could not write {}", manifest_path.display()))?;
-        }
-    }
-
-    Ok(())
-}
-
 pub fn publish(workspace: &Path, package: Package, no_dry_run: bool) -> Result<()> {
     let package_name = package.to_string();
     let package_path = windows_safe_path(&workspace.join(&package_name));
@@ -490,7 +430,7 @@ pub fn publish(workspace: &Path, package: Package, no_dry_run: bool) -> Result<(
             vec![
                 format!("--target={}", Chip::Esp32s3.target()),
                 format!(
-                    "--features=esp32s3,{}",
+                    "--features={}",
                     package
                         .feature_rules(&Config::for_chip(&Chip::Esp32s3))
                         .join(",")

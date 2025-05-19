@@ -193,13 +193,7 @@ fn cargo_doc(workspace: &Path, package: Package, chip: Option<Chip>) -> Result<P
         None
     };
 
-    let mut features = vec![];
-    if let Some(chip) = &chip {
-        features.push(chip.to_string());
-        features.extend(package.feature_rules(Config::for_chip(chip)));
-    } else {
-        features.extend(package.feature_rules(&Config::empty()));
-    }
+    let features = package.feature_rules(&chip.map_or(Config::empty(), |chip| Config::for_chip(&chip)));
 
     // Build up an array of command-line arguments to pass to `cargo`:
     let mut builder = CargoArgsBuilder::default()

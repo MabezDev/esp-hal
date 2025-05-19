@@ -219,16 +219,12 @@ fn lint_packages(workspace: &Path, args: LintPackagesArgs) -> Result<()> {
             }
 
             let feature_sets = [
-                vec![package.feature_rules(device)], // initially test all features
-                package.lint_feature_rules(device),  // add separate test cases
+                vec![package.feature_rules(&device)], // initially test all features
+                package.lint_feature_rules(&device),  // add separate test cases
             ]
             .concat();
 
-            for mut features in feature_sets {
-                if package.has_chip_features() {
-                    features.push(device.name())
-                }
-
+            for features in feature_sets {
                 lint_package(
                     workspace,
                     *package,

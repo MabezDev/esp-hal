@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use clap::Args;
 use esp_metadata::Chip;
 
-pub use self::{build::*, bump_version::*, check_changelog::*, run::*, semver_check::*};
+pub use self::{build::*, bump_version::*, check_changelog::*, run::*, semver_check::*, release::*};
 use crate::{cargo::CargoAction, Package};
 
 mod build;

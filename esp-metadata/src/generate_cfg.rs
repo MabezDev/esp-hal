@@ -201,7 +201,7 @@ pub struct Config {
 
 impl Config {
     /// The configuration for the specified chip.
-    pub fn for_chip(chip: &Chip) -> &Self {
+    pub fn for_chip(chip: &Chip) -> Self {
         match chip {
             Chip::Esp32 => include_toml!(Config, "../devices/esp32.toml"),
             Chip::Esp32c2 => include_toml!(Config, "../devices/esp32c2.toml"),
@@ -211,6 +211,7 @@ impl Config {
             Chip::Esp32s2 => include_toml!(Config, "../devices/esp32s2.toml"),
             Chip::Esp32s3 => include_toml!(Config, "../devices/esp32s3.toml"),
         }
+        .clone()
     }
 
     /// Create an empty configuration
