@@ -9,12 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+
+### Changed
+
+
+### Fixed
+
+
+### Removed
+
+
+## [v0.16.0] - 2025-10-13
+
+### Added
+
 - `AccessPointInfo::country` to access the Country Code from the Wi-Fi scan results (#3837)
 - `unstable` feature to opt into `ble`, `esp-now`, `csi`, `sniffer`, `esp-ieee802154` and `smoltcp` APIs (#3865)
 - Added unstable `wifi-eap` feature (#3924)
 - Optional `max` field in `ScanConfig` to allow limiting the number of returned results (#3963)
 - `set_phy_calibration_data` and `phy_calibration_data` (#4001)
-- common traits for `Protocol`, `Country`,  (#4017)
+- common traits for `Protocol`, `Country`, (#4017)
 - `BuilderLite` pattern to `AccessPointConfig`, `ClientConfig`, and `EapClientConfig` (#4017, #4115)
 - lifetime to `Sniffer` (#4017)
 - `dtim_period` parameter for `PowerSaveMode` (#4040)
@@ -33,44 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ble`, `esp-now`, `csi`, `sniffer`, `esp-ieee802154` and `smoltcp` features and APIs marked as unstable (#3865)
 - Update bt-hci version to add additional HCI commands (#3920)
 - A number of enums/structs have been marked as `#[non_exhaustive]` (#3981, #4017)
-  - `AuthMethod`, `Protocol`, `AccessPointInfo`, `AccessPointConfiguration`, `ClientConfiguration`, `Capability`, `Configuration`, `WifiEvent`, `InternalWifiError`, `ScanTypeConfig`, `WifiState`, and `WifiMode`
-- The `Configuration`, `ClientConfiguration`, `AccessPointConfiguration`, and `EapClientConfiguration` enums have been renamed to `ModeConfig`, `ClientConfig`, `AccessPointConfig`, and `EapClientConfig` (#3994, #4278)
-  - Error types implements `core::error:Error`
-- Use `esp-phy` internally for PHY initialization (#3892)
-- `ap_state()` and `sta_state()` marked as stable (#4017)
-- `wifi_state()` marked as unstable (#4017)
-- `ap_mac` and `sta_mac` returns `[u8; 6]` instead of taking an `[u8; 6]` argument (#4017)
-- `RxControlInfo` hidden behind `esp-now` feature (#4017)
-- `set_configuration()` to `set_config() (#4017)
-- `WifiState` split into `WifiStaState` and `WifiApState` (#4046)
-- `Mixed` has been renamed to `ApSta` in `Config` and `Capability` (#4040)
-- The memory allocation functions expected by `esp_radio` have been renamed and extended (#3890, #4043)
-- Updated radio related drivers to ESP-IDF 5.5.1 (#4113)
-- Event handlers are now passed the event by reference (#4113)
-- Some build-time configuration options have been replaced by runtime options in `WifiConfig` (#4121)
-- Update to bt-hci version with flash usage improvements (#4146, #4165)
-- `scan_mode`, `(ap_)beacon_timeout`, `listen_interval` and `failure_retry_cnt` config options have been replaced by runtime options in `AccessPointConfig`, `ClientConfig` and `EapClientConfig` (#4224)
-- The `ieee802154_rx_queue_size` config option has been replaced by a runtime option in `esp_radio::ieee802154::Config` (#4224)
-- The default value of `wifi_max_burst_size` has been changed to 3 (#4231)
-- Set `ble_ll_sync_cnt` to 0 on C6, C2 and H2 as in esp-idf Kconfig default (#4241)
-- `esp_radio::wifi::WifiController::scan_with_config_sync` has been renamed to `scan_with_config` (#4294)
-
-### Fixed
-
-- Fixed a BLE panic caused by unimplemented functions (#3762)
-- Fixed the BLE stack crashing in certain cases (#3854)
-- `ADC2` now cannot be used simultaneously with `radio` on ESP32 (#3876)
-- Fixed names of some Wi-Fi events: ApStaConnected, ApStaDisconnected, ApProbeReqReceived (#4065)
-- BLE on ESP32-C2 with 26MHz xtal (#4062)
-
-### Removed
-
-- `scan_with_config_sync_max`, `scan_with_config_sync_max`, `scan_n`, and `scan_n_async` functions (#3963)
-- `EnumSetType` from `Protocol`, `Country` enums (#4017)
-- `AtomicWifiState` and `WifiDeviceMode` are not available anymore (#4029)
-- `wifi_state()` and `WifiState` are not available anymore (#4046)
-- `config` module (#4040)
-- Remove `as_client_conf_ref`, `as_ap_conf_ref`, `as_ap_conf_mut`, `as_client_conf_mut` and `as_mixed_conf_mut` from `Config` (#4060)
 
 ## [v0.15.0] - 2025-07-16
 
@@ -329,4 +305,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [v0.14.0]: https://github.com/esp-rs/esp-hal/compare/esp-wifi-v0.13.0...esp-wifi-v0.14.0
 [v0.14.1]: https://github.com/esp-rs/esp-hal/compare/esp-wifi-v0.14.0...esp-wifi-v0.14.1
 [v0.15.0]: https://github.com/esp-rs/esp-hal/compare/esp-wifi-v0.14.1...esp-wifi-v0.15.0
-[Unreleased]: https://github.com/esp-rs/esp-hal/compare/esp-wifi-v0.15.0...HEAD
+[v0.16.0]: https://github.com/esp-rs/esp-hal/compare/esp-wifi-v0.15.0...esp-radio-v0.16.0
+[Unreleased]: https://github.com/esp-rs/esp-hal/compare/esp-radio-v0.16.0...HEAD
