@@ -63,7 +63,6 @@ pub enum Package {
     EspRiscvRt,
     EspStorage,
     EspSync,
-    EspRadio,
     EspRadioRtosDriver,
     EspRtos,
     Examples,
@@ -178,7 +177,6 @@ impl Package {
             self,
             EspHal
                 | EspLpHal
-                | EspRadio
                 | EspPhy
                 | EspRomSys
                 | EspBootloaderEspIdf

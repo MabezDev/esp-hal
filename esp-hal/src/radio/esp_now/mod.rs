@@ -24,7 +24,7 @@ use portable_atomic::{AtomicBool, AtomicU8, Ordering};
 use super::*;
 #[cfg(feature = "csi")]
 use crate::radio::wifi::csi::CsiConfig;
-use crate::{
+use crate::radio::{
     sys::include::*,
     wifi::{RxControlInfo, WifiError},
 };

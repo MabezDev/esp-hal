@@ -19,10 +19,10 @@ use esp_hal::{
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
     main,
+    radio::wifi,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_hal::radio::wifi;
 use ieee80211::{match_frames, mgmt_frame::BeaconFrame};
 
 esp_bootloader_esp_idf::esp_app_desc!();

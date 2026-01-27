@@ -1,6 +1,6 @@
 use crate::{
-    radio::{compat::OSI_FUNCS_TIME_BLOCKING, sys::c_types::*},
     preempt::queue::{QueueHandle, QueuePtr},
+    radio::{compat::OSI_FUNCS_TIME_BLOCKING, sys::c_types::*},
 };
 
 pub(crate) fn queue_create(queue_len: c_int, item_size: c_int) -> *mut c_void {

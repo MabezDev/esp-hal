@@ -138,6 +138,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         // remaining linker scripts which are common to all devices:
         copy_dir_all(&config_symbols, &cfg, "ld/sections", &out)?;
         copy_dir_all(&config_symbols, &cfg, format!("ld/{}", chip.name()), &out)?;
+
+        // If WiFi is enabled, include the radio linker provides
+        if cfg!(feature = "wifi") {
+            let radio_file = format!("ld/radio/{}_provides.x", chip.name());
+            if std::path::Path::new(&radio_file).exists() {
+                fs::copy(&radio_file, out.join(format!("{}_provides.x", chip.name())))?;
+            }
+        }
     }
 
     Ok(())

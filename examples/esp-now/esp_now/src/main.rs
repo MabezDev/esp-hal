@@ -11,11 +11,11 @@ use esp_hal::{
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
     main,
+    radio::esp_now::{BROADCAST_ADDRESS, PeerInfo},
     time::{self, Duration},
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_hal::radio::esp_now::{BROADCAST_ADDRESS, PeerInfo};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 

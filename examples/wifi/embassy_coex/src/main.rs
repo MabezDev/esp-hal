@@ -19,22 +19,22 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
+    radio::{
+        ble::controller::BleConnector,
+        wifi::{
+            ModeConfig,
+            WifiController,
+            WifiDevice,
+            WifiEvent,
+            scan::ScanConfig,
+            sta::StationConfig,
+        },
+    },
     ram,
     rng::Rng,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_hal::radio::{
-    ble::controller::BleConnector,
-    wifi::{
-        ModeConfig,
-        WifiController,
-        WifiDevice,
-        WifiEvent,
-        scan::ScanConfig,
-        sta::StationConfig,
-    },
-};
 use trouble_host::prelude::*;
 esp_bootloader_esp_idf::esp_app_desc!();
 

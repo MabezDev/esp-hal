@@ -32,17 +32,19 @@ use self::{
     sta::StationConfig,
     state::*,
 };
-use crate::radio::{
-    InitializationError,
-    RadioRefGuard,
-    common_adapter::*,
-    hal::ram,
-    sys::{
-        c_types,
-        include::{self, *},
+use crate::{
+    esp_wifi_result,
+    radio::{
+        InitializationError,
+        RadioRefGuard,
+        common_adapter::*,
+        hal::ram,
+        sys::{
+            c_types,
+            include::{self, *},
+        },
     },
 };
-use crate::esp_wifi_result;
 pub mod ap;
 
 unstable_module!(
@@ -684,9 +686,7 @@ pub fn station_mac() -> [u8; 6] {
 
 #[cfg(esp32)]
 fn set_mac_time_update_cb(wifi: crate::hal::peripherals::WIFI<'_>) {
-    use crate::radio::phy::MacTimeExt;
-
-    use crate::radio::sys::include::esp_wifi_internal_update_mac_time;
+    use crate::radio::{phy::MacTimeExt, sys::include::esp_wifi_internal_update_mac_time};
     unsafe {
         wifi.set_mac_time_update_cb(|duration| {
             esp_wifi_internal_update_mac_time(duration.as_micros() as u32);
@@ -1302,14 +1302,10 @@ impl Device for WifiDevice<'_> {
     fn capabilities(&self) -> smoltcp::phy::DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.max_transmission_unit = MTU;
-        caps.max_burst_size = if esp_config_int!(usize, "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE") == 0
-        {
+        caps.max_burst_size = if esp_config_int!(usize, "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE") == 0 {
             None
         } else {
-            Some(esp_config_int!(
-                usize,
-                "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE"
-            ))
+            Some(esp_config_int!(usize, "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE"))
         };
         caps
     }
@@ -1521,10 +1517,7 @@ pub(crate) mod embassy {
                 if esp_config_int!(usize, "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE") == 0 {
                     None
                 } else {
-                    Some(esp_config_int!(
-                        usize,
-                        "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE"
-                    ))
+                    Some(esp_config_int!(usize, "ESP_HAL_CONFIG_WIFI_MAX_BURST_SIZE"))
                 };
             caps
         }
@@ -1572,7 +1565,7 @@ pub struct Interfaces<'d> {
     /// ESP-NOW interface.
     #[cfg(all(feature = "esp-now", feature = "unstable"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
-    pub esp_now: crate::esp_now::EspNow<'d>,
+    pub esp_now: crate::radio::esp_now::EspNow<'d>,
     /// Wi-Fi sniffer interface.
     #[cfg(all(feature = "sniffer", feature = "unstable"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
@@ -1869,7 +1862,8 @@ pub fn new<'d>(
             tx_buf_type: crate::radio::sys::include::CONFIG_ESP_WIFI_TX_BUFFER_TYPE as i32,
             static_tx_buf_num: config.static_tx_buf_num as _,
             dynamic_tx_buf_num: config.dynamic_tx_buf_num as _,
-            rx_mgmt_buf_type: crate::radio::sys::include::CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUF as i32,
+            rx_mgmt_buf_type: crate::radio::sys::include::CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUF
+                as i32,
             rx_mgmt_buf_num: crate::radio::sys::include::CONFIG_ESP_WIFI_RX_MGMT_BUF_NUM_DEF as i32,
             cache_tx_buf_num: crate::radio::sys::include::WIFI_CACHE_TX_BUFFER_NUM as i32,
             csi_enable: cfg!(feature = "csi") as i32,
@@ -1884,8 +1878,8 @@ pub fn new<'d>(
             mgmt_sbuf_num: crate::radio::sys::include::WIFI_MGMT_SBUF_NUM as i32,
             feature_caps: internal::__ESP_RADIO_G_WIFI_FEATURE_CAPS,
             sta_disconnected_pm: false,
-            espnow_max_encrypt_num: crate::radio::sys::include::CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM
-                as i32,
+            espnow_max_encrypt_num:
+                crate::radio::sys::include::CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM as i32,
 
             tx_hetb_queue_num: 3,
             dump_hesigb_enable: false,
@@ -2354,10 +2348,7 @@ impl WifiController<'_> {
         ) {
             return Ok(true);
         }
-        if matches!(
-            access_point_state(),
-            WifiAccessPointState::Started
-        ) {
+        if matches!(access_point_state(), WifiAccessPointState::Started) {
             return Ok(true);
         }
         Ok(false)

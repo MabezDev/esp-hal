@@ -36,16 +36,18 @@ unstable_module! {
 }
 
 pub(crate) unsafe extern "C" fn malloc(size: u32) -> *mut crate::radio::sys::c_types::c_void {
-    unsafe { crate::compat::malloc::malloc(size as usize).cast() }
+    unsafe { crate::radio::compat::malloc::malloc(size as usize).cast() }
 }
 
 #[cfg(any(esp32, esp32c3, esp32s3))]
-pub(crate) unsafe extern "C" fn malloc_internal(size: u32) -> *mut crate::radio::sys::c_types::c_void {
-    unsafe { crate::compat::malloc::malloc_internal(size as usize).cast() }
+pub(crate) unsafe extern "C" fn malloc_internal(
+    size: u32,
+) -> *mut crate::radio::sys::c_types::c_void {
+    unsafe { crate::radio::compat::malloc::malloc_internal(size as usize).cast() }
 }
 
 pub(crate) unsafe extern "C" fn free(ptr: *mut crate::radio::sys::c_types::c_void) {
-    unsafe { crate::compat::malloc::free(ptr.cast()) }
+    unsafe { crate::radio::compat::malloc::free(ptr.cast()) }
 }
 
 /// Gets the MAC address of the device.

@@ -5,21 +5,23 @@ use core::marker::PhantomData;
 use esp_sync::NonReentrantMutex;
 
 use super::RxControlInfo;
-use crate::radio::{
-    WifiError,
-    sys::include::{
-        esp_wifi_80211_tx,
-        esp_wifi_set_promiscuous,
-        esp_wifi_set_promiscuous_rx_cb,
-        wifi_interface_t,
-        wifi_interface_t_WIFI_IF_AP,
-        wifi_interface_t_WIFI_IF_STA,
-        wifi_pkt_rx_ctrl_t,
-        wifi_promiscuous_pkt_t,
-        wifi_promiscuous_pkt_type_t,
+use crate::{
+    esp_wifi_result,
+    radio::{
+        WifiError,
+        sys::include::{
+            esp_wifi_80211_tx,
+            esp_wifi_set_promiscuous,
+            esp_wifi_set_promiscuous_rx_cb,
+            wifi_interface_t,
+            wifi_interface_t_WIFI_IF_AP,
+            wifi_interface_t_WIFI_IF_STA,
+            wifi_pkt_rx_ctrl_t,
+            wifi_promiscuous_pkt_t,
+            wifi_promiscuous_pkt_type_t,
+        },
     },
 };
-use crate::esp_wifi_result;
 
 /// Represents a Wi-Fi packet in promiscuous mode.
 #[instability::unstable]

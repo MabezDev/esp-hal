@@ -1,8 +1,8 @@
 use esp_radio_rtos_driver::semaphore::SemaphoreKind;
 
 use crate::{
-    radio::{compat::OSI_FUNCS_TIME_BLOCKING, sys::c_types::c_void},
     preempt::semaphore::{SemaphoreHandle, SemaphorePtr},
+    radio::{compat::OSI_FUNCS_TIME_BLOCKING, sys::c_types::c_void},
 };
 
 pub(crate) fn sem_create(max: u32, initial: u32) -> *mut c_void {

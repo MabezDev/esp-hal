@@ -11,6 +11,8 @@
 //! calibration data elsewhere (e.g. in flash). Using [set_phy_calibration_data] you can restore
 //! previously persisted calibration data.
 
+use esp_sync::{NonReentrantMutex, RawMutex};
+
 #[cfg(esp32)]
 use crate::hal::time::{Duration, Instant};
 use crate::hal::{
@@ -18,7 +20,6 @@ use crate::hal::{
     rtc_cntl::{SocResetReason, reset_reason},
     system::Cpu,
 };
-use esp_sync::{NonReentrantMutex, RawMutex};
 
 mod common_adapter;
 mod phy_init_data;
@@ -396,7 +397,9 @@ pub fn last_calibration_result() -> Option<CalibrationResult> {
     PHY_STATE.with(|phy_state| {
         if phy_state.calibrated {
             Some(
-                if phy_state.calibration_result == crate::radio::sys::include::ESP_CAL_DATA_CHECK_FAIL as i32 {
+                if phy_state.calibration_result
+                    == crate::radio::sys::include::ESP_CAL_DATA_CHECK_FAIL as i32
+                {
                     CalibrationResult::DataCheckFailed
                 } else {
                     CalibrationResult::Ok

@@ -1,3 +1,5 @@
+//! BLE controller module
+
 use core::task::Poll;
 
 use bt_hci::{
@@ -10,12 +12,12 @@ use bt_hci::{
 };
 use docsplay::Display;
 use esp_hal::asynch::AtomicWaker;
-use crate::radio::phy::PhyInitGuard;
 
 use crate::radio::{
-    ble::{Config, InvalidConfigError, have_hci_read_data, read_hci, read_next, send_hci},
     InitializationError,
     RadioRefGuard,
+    ble::{Config, InvalidConfigError, have_hci_read_data, read_hci, read_next, send_hci},
+    phy::PhyInitGuard,
 };
 
 #[derive(Display, Debug, Copy, Clone, Eq, PartialEq, Hash)]

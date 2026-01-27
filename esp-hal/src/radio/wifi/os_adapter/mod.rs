@@ -11,7 +11,6 @@ use core::ptr::NonNull;
 
 use allocator_api2::boxed::Box;
 use enumset::EnumSet;
-use crate::radio::phy::PhyController;
 use esp_sync::{NonReentrantMutex, RawMutex};
 
 use super::WifiEvent;
@@ -22,6 +21,7 @@ use crate::radio::{
     },
     hal::{clock::ModemClockController, peripherals::WIFI},
     memory_fence::memory_fence,
+    phy::PhyController,
     sys::c_types::*,
     time::{blob_ticks_to_micros, millis_to_blob_ticks},
 };
@@ -1257,7 +1257,9 @@ pub unsafe extern "C" fn log_writev(
         crate::radio::sys::log::syslog(
             level,
             format as _,
-            core::mem::transmute::<crate::radio::sys::include::va_list, core::ffi::VaListImpl<'_>>(args),
+            core::mem::transmute::<crate::radio::sys::include::va_list, core::ffi::VaListImpl<'_>>(
+                args,
+            ),
         );
     }
 }
@@ -1750,7 +1752,9 @@ pub unsafe extern "C" fn coex_schm_process_restart_wrapper() -> crate::radio::sy
 pub unsafe extern "C" fn coex_schm_register_cb_wrapper(
     arg1: crate::radio::sys::c_types::c_int,
     cb: ::core::option::Option<
-        unsafe extern "C" fn(arg1: crate::radio::sys::c_types::c_int) -> crate::radio::sys::c_types::c_int,
+        unsafe extern "C" fn(
+            arg1: crate::radio::sys::c_types::c_int,
+        ) -> crate::radio::sys::c_types::c_int,
     >,
 ) -> crate::radio::sys::c_types::c_int {
     trace!("coex_schm_register_cb_wrapper {} {:?}", arg1, cb);
@@ -1762,7 +1766,8 @@ pub unsafe extern "C" fn coex_schm_register_cb_wrapper(
     unsafe {
         crate::radio::sys::include::coex_schm_register_callback(
             arg1 as u32,
-            unwrap!(cb) as *const crate::radio::sys::c_types::c_void as *mut crate::radio::sys::c_types::c_void,
+            unwrap!(cb) as *const crate::radio::sys::c_types::c_void
+                as *mut crate::radio::sys::c_types::c_void,
         )
     }
 }

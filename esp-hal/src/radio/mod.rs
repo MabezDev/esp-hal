@@ -121,12 +121,6 @@
 mod fmt;
 
 use docsplay::Display;
-use crate as hal;
-#[cfg(feature = "unstable")]
-#[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
-pub use crate::radio::phy::CalibrationResult;
-#[cfg(not(feature = "unstable"))]
-use crate::radio::phy::CalibrationResult;
 use esp_radio_rtos_driver as preempt;
 use esp_sync::RawMutex;
 #[cfg(esp32)]
@@ -139,6 +133,12 @@ use hal::{
 };
 use sys::include::esp_phy_calibration_data_t;
 
+use crate as hal;
+#[cfg(feature = "unstable")]
+#[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
+pub use crate::radio::phy::CalibrationResult;
+#[cfg(not(feature = "unstable"))]
+use crate::radio::phy::CalibrationResult;
 #[cfg(feature = "ble")]
 pub use crate::radio::private::InitializationError;
 #[cfg(not(feature = "ble"))]
@@ -381,10 +381,7 @@ fn is_interrupts_disabled() -> bool {
 pub fn wifi_set_log_verbose() {
     #[cfg(all(feature = "print-logs-from-driver", not(esp32h2)))]
     unsafe {
-        use sys::include::{
-            esp_wifi_internal_set_log_level,
-            wifi_log_level_t_WIFI_LOG_VERBOSE,
-        };
+        use sys::include::{esp_wifi_internal_set_log_level, wifi_log_level_t_WIFI_LOG_VERBOSE};
 
         esp_wifi_internal_set_log_level(wifi_log_level_t_WIFI_LOG_VERBOSE);
     }

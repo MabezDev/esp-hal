@@ -1,7 +1,6 @@
 use alloc::boxed::Box;
 use core::ptr::{NonNull, addr_of, addr_of_mut};
 
-use crate::radio::phy::{PhyController, PhyInitGuard};
 use esp_sync::RawMutex;
 use portable_atomic::{AtomicBool, Ordering};
 
@@ -14,6 +13,7 @@ use crate::{
     },
     compat::common::str_from_c,
     hal::ram,
+    radio::phy::{PhyController, PhyInitGuard},
     sys::{c_types::*, include::*},
 };
 

@@ -17,6 +17,11 @@ doc-config = { features = ["unstable", "rt"], append = [
     { if = 'chip_has("psram")', features = ["psram"] },
     { if = 'chip_has("soc_has_usb0")', features = ["__usb_otg"] },
     { if = 'chip_has("bt")', features = ["__bluetooth"] },
+    { if = 'chip_has("wifi")', features = ["wifi", "wifi-eap", "csi", "esp-now", "sniffer", "smoltcp/proto-ipv4", "smoltcp/proto-ipv6"] },
+    { if = 'chip_has("bt")', features = ["ble"] },
+    { if = 'chip_has("ieee802154")', features = ["ieee802154"] },
+    { if = 'chip_has("wifi") && chip_has("bt")', features = ["coex"] },
+    { if = 'chip_has("wifi") || chip_has("bt") || chip_has("ieee802154")', features = ["unstable"] },
 ] }
 check-configs = [
     { features = [] },
@@ -25,6 +30,14 @@ check-configs = [
     { features = ["unstable", "rt", "psram"], if = 'chip_has("psram")' },
     { features = ["unstable", "rt", "__usb_otg"], if = 'chip_has("soc_has_usb0")' },
     { features = ["unstable", "rt", "__bluetooth"], if = 'chip_has("bt")' },
+
+    { features = ["esp-hal/unstable", "esp-hal/rt", "wifi"], if = 'chip_has("wifi")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "wifi", "print-logs-from-driver", "unstable"], if = 'chip_has("wifi") && chip_has("xtensa")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "defmt", "wifi", "wifi-eap", "esp-now", "sniffer", "smoltcp/proto-ipv4", "smoltcp/proto-ipv6"], if = 'chip_has("wifi")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "ble"], if = 'chip_has("bt")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "ieee802154"], if = 'chip_has("ieee802154")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "defmt", "wifi", "wifi-eap", "esp-now", "sniffer", "smoltcp/proto-ipv4", "smoltcp/proto-ipv6", "ble", "coex"], if = 'chip_has("wifi") && chip_has("bt")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "wifi-eap", "unstable"], if = 'chip_has("wifi")' },
 ]
 # Prefer fewer, but more complex clippy rules. A clippy run should cover as much code as possible.
 clippy-configs = [
@@ -218,7 +231,7 @@ esp32   = [
     "dep:sha1",
     "dep:sha2",
     "esp-radio-rtos-driver?/esp32",
-    "esp-wifi-sys-esp32?/default",
+    "dep:esp-wifi-sys-esp32",
 ]
 ##
 esp32c2 = [
@@ -229,7 +242,7 @@ esp32c2 = [
     "esp-sync/esp32c2",
     "esp-metadata-generated/esp32c2",
     "esp-radio-rtos-driver?/esp32c2",
-    "esp-wifi-sys-esp32c2?/default",
+    "dep:esp-wifi-sys-esp32c2",
 ]
 ##
 esp32c3 = [
@@ -241,7 +254,7 @@ esp32c3 = [
     "esp-sync/esp32c3",
     "esp-metadata-generated/esp32c3",
     "esp-radio-rtos-driver?/esp32c3",
-    "esp-wifi-sys-esp32c3?/default",
+    "dep:esp-wifi-sys-esp32c3",
 ]
 ##
 esp32c6 = [
@@ -252,17 +265,18 @@ esp32c6 = [
     "esp-sync/esp32c6",
     "esp-metadata-generated/esp32c6",
     "esp-radio-rtos-driver?/esp32c6",
-    "esp-wifi-sys-esp32c6?/default",
+    "dep:esp-wifi-sys-esp32c6",
 ]
 ##
 esp32h2 = [
     "dep:esp32h2",
     "esp-riscv-rt/rtc-ram",
+    "procmacros/has-lp-core",
     "esp-rom-sys/esp32h2",
     "esp-sync/esp32h2",
     "esp-metadata-generated/esp32h2",
     "esp-radio-rtos-driver?/esp32h2",
-    "esp-wifi-sys-esp32h2?/default",
+    "dep:esp-wifi-sys-esp32h2",
 ]
 ##
 esp32s2 = [
@@ -302,13 +316,6 @@ wifi = [
     "dep:num-derive",
     "dep:num-traits",
     "dep:portable_atomic_enum",
-    "dep:esp-wifi-sys-esp32",
-    "dep:esp-wifi-sys-esp32c2",
-    "dep:esp-wifi-sys-esp32c3",
-    "dep:esp-wifi-sys-esp32c6",
-    "dep:esp-wifi-sys-esp32h2",
-    "dep:esp-wifi-sys-esp32s2",
-    "dep:esp-wifi-sys-esp32s3",
 ]
 
 ## Enable Wi-Fi Enterprise Authentication Protocol (EAP) support.
@@ -457,13 +464,11 @@ defmt = [
     "ieee802154?/defmt",
 ]
 
-#DOC_IF has("psram")
-#! ### PSRAM Feature Flags
+# ### PSRAM Feature Flags
 
-## Use externally connected PSRAM (`quad` by default, can be configured to `octal` via ESP_HAL_CONFIG_PSRAM_MODE)
+# Use externally connected PSRAM (`quad` by default, can be configured to `octal` via ESP_HAL_CONFIG_PSRAM_MODE)
 psram = []
 
-#DOC_ENDIF
 
 #! ### Unstable APIs
 #! Unstable APIs are drivers and features that are not yet ready for general use.
@@ -496,7 +501,7 @@ requires-unstable = []
 mixed_attributes_style = "allow"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(host_os, values("windows"))', 'cfg(__docs_build)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(host_os, values("windows"))'] }
 
 # Radio dependencies are hidden behind features so cargo machete incorrectly marks them as unused.
 [package.metadata.cargo-machete]

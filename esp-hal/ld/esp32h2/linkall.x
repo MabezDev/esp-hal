@@ -11,3 +11,6 @@ REGION_ALIAS("RTC_FAST_RWDATA", RTC_FAST);
 
 INCLUDE "esp32h2.x"
 INCLUDE "hal-defaults.x"
+#IF wifi
+INCLUDE "esp32h2_provides.x"
+#ENDIF

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crate::{
+    hal::{self, ram},
     radio::{
         compat::{common::*, semaphore::*},
         sys::{
@@ -9,7 +10,6 @@ use crate::{
         },
         time::blob_ticks_to_micros,
     },
-    hal::{self, ram},
 };
 
 /// **************************************************************************
@@ -561,7 +561,11 @@ pub unsafe extern "C" fn queue_recv(
     item: *mut c_void,
     block_time_ms: u32,
 ) -> i32 {
-    crate::radio::compat::queue::queue_receive(queue.cast(), item, blob_ticks_to_micros(block_time_ms))
+    crate::radio::compat::queue::queue_receive(
+        queue.cast(),
+        item,
+        blob_ticks_to_micros(block_time_ms),
+    )
 }
 
 pub unsafe extern "C" fn queue_recv_from_isr(
@@ -620,6 +624,8 @@ pub unsafe extern "C" fn __esp_radio_esp_event_post(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __esp_radio_vTaskDelay(ticks: u32) {
     unsafe {
-        crate::radio::compat::common::__esp_radio_usleep(crate::radio::time::blob_ticks_to_micros(ticks));
+        crate::radio::compat::common::__esp_radio_usleep(crate::radio::time::blob_ticks_to_micros(
+            ticks,
+        ));
     }
 }

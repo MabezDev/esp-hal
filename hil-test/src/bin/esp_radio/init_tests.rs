@@ -4,6 +4,10 @@ mod init_tests {
     use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
     #[cfg(soc_has_wifi)]
     use esp_hal::peripherals::WIFI;
+    #[cfg(soc_has_bt)]
+    use esp_hal::radio::ble::controller::BleConnector;
+    #[cfg(soc_has_wifi)]
+    use esp_hal::radio::wifi::WifiError;
     #[cfg(riscv)]
     use esp_hal::riscv::interrupt::free as interrupt_free;
     #[cfg(xtensa)]
@@ -14,10 +18,6 @@ mod init_tests {
         peripherals::Peripherals,
         timer::timg::TimerGroup,
     };
-    #[cfg(soc_has_bt)]
-    use esp_hal::radio::ble::controller::BleConnector;
-    #[cfg(soc_has_wifi)]
-    use esp_hal::radio::wifi::WifiError;
     use esp_rtos::embassy::InterruptExecutor;
     use hil_test::mk_static;
     use static_cell::StaticCell;
@@ -58,7 +58,8 @@ mod init_tests {
         let sw_ints = SoftwareInterruptControl::new(p.SW_INTERRUPT);
         esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
 
-        let init = critical_section::with(|_| esp_hal::radio::wifi::new(p.WIFI, Default::default()));
+        let init =
+            critical_section::with(|_| esp_hal::radio::wifi::new(p.WIFI, Default::default()));
 
         match init {
             Ok(_) => defmt::info!("Initialized wifi in critical section"),

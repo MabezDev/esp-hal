@@ -37,19 +37,19 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
+    radio::wifi::{
+        ModeConfig,
+        WifiController,
+        WifiDevice,
+        WifiEvent,
+        ap::AccessPointConfig,
+        sta::StationConfig,
+    },
     ram,
     rng::Rng,
     timer::timg::TimerGroup,
 };
 use esp_println::{print, println};
-use esp_hal::radio::wifi::{
-    ModeConfig,
-    WifiController,
-    WifiDevice,
-    WifiEvent,
-    ap::AccessPointConfig,
-    sta::StationConfig,
-};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 

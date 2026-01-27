@@ -18,7 +18,6 @@
 use byte::{BytesExt, TryRead};
 use docsplay::Display;
 use esp_hal::{clock::PhyClockGuard, peripherals::IEEE802154};
-use crate::radio::phy::PhyInitGuard;
 use esp_sync::NonReentrantMutex;
 use ieee802154::mac::{self, FooterMode, FrameSerDesContext};
 
@@ -32,6 +31,7 @@ pub use self::{
     pib::{CcaMode, PendingMode},
     raw::RawReceived,
 };
+use crate::radio::phy::PhyInitGuard;
 mod frame;
 mod hal;
 mod pib;
@@ -63,20 +63,76 @@ impl From<byte::Error> for Error {
 /// IEEE 802.15.4 driver configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+/// IEEE 802.15.4 radio settings.
 pub struct Config {
+    /// Enable automatic acknowledgment transmission.
+    /// When `true`, the radio will automatically send ACK frames for received packets
+    /// that request acknowledgment.
     pub auto_ack_tx: bool,
+
+    /// Enable automatic acknowledgment reception handling.
+    /// When `true`, the radio will automatically handle incoming ACK frames
+    /// for transmitted packets.
     pub auto_ack_rx: bool,
+
+    /// Enable enhanced acknowledgment frame transmission.
+    /// When `true`, allows transmission of enhanced ACK frames with additional
+    /// information elements as defined in IEEE 802.15.4-2015.
     pub enhance_ack_tx: bool,
+
+    /// Enable promiscuous mode.
+    /// When `true`, the radio will receive all frames regardless of addressing,
+    /// bypassing normal frame filtering.
     pub promiscuous: bool,
+
+    /// Set device as PAN coordinator.
+    /// When `true`, configures the device to act as a Personal Area Network
+    /// coordinator with additional responsibilities.
     pub coordinator: bool,
+
+    /// Keep receiver active when idle.
+    /// When `true`, the radio receiver remains on during idle periods,
+    /// allowing immediate reception of incoming frames.
     pub rx_when_idle: bool,
+
+    /// Transmission power level in dBm.
+    /// Sets the RF output power for transmitted frames. Valid range
+    /// depends on the specific radio hardware capabilities.
     pub txpower: i8,
+
+    /// IEEE 802.15.4 channel number.
+    /// Specifies the radio frequency channel to use for communication.
+    /// Valid range is typically 11-26 for 2.4 GHz band.
     pub channel: u8,
+
+    /// Clear Channel Assessment threshold in dBm.
+    /// Signal strength threshold used to determine if the channel is clear
+    /// before transmission. Lower values make CCA more sensitive.
     pub cca_threshold: i8,
+
+    /// Clear Channel Assessment mode.
+    /// Specifies the method used to assess whether the channel is clear
+    /// before attempting transmission.
     pub cca_mode: CcaMode,
+
+    /// Personal Area Network identifier.
+    /// When `Some(id)`, filters received frames to match this PAN ID.
+    /// When `None`, PAN ID filtering is disabled.
     pub pan_id: Option<u16>,
+
+    /// Short address for this device.
+    /// When `Some(addr)`, sets the 16-bit short address for frame filtering.
+    /// When `None`, short address filtering is disabled.
     pub short_addr: Option<u16>,
+
+    /// Extended address for this device.
+    /// When `Some(addr)`, sets the 64-bit extended (MAC) address for frame filtering.
+    /// When `None`, extended address filtering is disabled.
     pub ext_addr: Option<u64>,
+
+    /// Size of the receive queue buffer.
+    /// Determines how many received frames can be buffered before
+    /// older frames are dropped or processing blocks.
     pub rx_queue_size: usize,
 }
 

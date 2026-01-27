@@ -10,4 +10,6 @@ REGION_ALIAS("RTC_FAST_RWTEXT", RTC_FAST);
 REGION_ALIAS("RTC_FAST_RWDATA", RTC_FAST);
 
 INCLUDE "esp32c6.x"
-INCLUDE "hal-defaults.x"
+INCLUDE "hal-defaults.x"#IF wifi
+INCLUDE "esp32c6_provides.x"
+#ENDIF

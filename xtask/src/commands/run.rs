@@ -66,7 +66,6 @@ pub fn run_doc_tests_for_package(workspace: &Path, package: Package, chip: Chip)
     // the docs are fixed up.
     let temporary_package_list = [
         Package::EspHal,
-        Package::EspRadio,
         Package::EspBootloaderEspIdf,
     ];
     if !temporary_package_list.contains(&package) {

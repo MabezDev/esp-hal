@@ -3,9 +3,11 @@
 
 use esp_alloc as _;
 use esp_backtrace as _;
-use esp_hal::main;
+use esp_hal::{
+    main,
+    radio::ieee802154::{Config, Ieee802154},
+};
 use esp_println::println;
-use esp_hal::radio::ieee802154::{Config, Ieee802154};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 

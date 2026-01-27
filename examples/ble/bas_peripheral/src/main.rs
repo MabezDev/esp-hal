@@ -11,9 +11,9 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
+    radio::ble::controller::BleConnector,
     timer::timg::TimerGroup,
 };
-use esp_hal::radio::ble::controller::BleConnector;
 use log::{info, warn};
 use trouble_host::prelude::*;
 

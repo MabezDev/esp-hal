@@ -8,3 +8,6 @@ REGION_ALIAS("RWTEXT", IRAM);
 
 INCLUDE "esp32c2.x"
 INCLUDE "hal-defaults.x"
+#IF wifi
+INCLUDE "esp32c2_provides.x"
+#ENDIF

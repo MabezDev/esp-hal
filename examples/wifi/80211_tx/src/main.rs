@@ -14,12 +14,12 @@ use esp_hal::{
     delay::Delay,
     interrupt::software::SoftwareInterruptControl,
     main,
+    radio::wifi,
     ram,
     time::Duration,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_hal::radio::wifi;
 use ieee80211::{
     common::{CapabilitiesInformation, FCFFlags},
     element_chain,

@@ -25,19 +25,19 @@ use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
+    radio::wifi::{
+        ModeConfig,
+        WifiController,
+        WifiDevice,
+        WifiEvent,
+        scan::ScanConfig,
+        sta::StationConfig,
+    },
     rng::Rng,
     rtc_cntl::Rtc,
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_hal::radio::wifi::{
-    ModeConfig,
-    WifiController,
-    WifiDevice,
-    WifiEvent,
-    scan::ScanConfig,
-    sta::StationConfig,
-};
 use log::{error, info};
 use sntpc::{NtpContext, NtpTimestampGenerator, get_time};
 

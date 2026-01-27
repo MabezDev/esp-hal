@@ -5,15 +5,17 @@ use core::{marker::PhantomData, mem::MaybeUninit};
 use esp_hal::time::Duration;
 use procmacros::BuilderLite;
 
-use crate::radio::{
-    sys::include,
-    wifi::{
-        WifiController,
-        WifiError,
-        ap::{AccessPointInfo, convert_ap_info},
+use crate::{
+    esp_wifi_result,
+    radio::{
+        sys::include,
+        wifi::{
+            WifiController,
+            WifiError,
+            ap::{AccessPointInfo, convert_ap_info},
+        },
     },
 };
-use crate::esp_wifi_result;
 
 /// Wi-Fi scan method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

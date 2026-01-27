@@ -576,7 +576,7 @@ fn run_ci_checks(workspace: &Path, args: CiArgs) -> Result<()> {
             build_documentation(
                 workspace,
                 BuildDocumentationArgs {
-                    packages: vec![Package::EspHal, Package::EspRadio, Package::EspRtos],
+                    packages: vec![Package::EspHal, Package::EspRtos],
                     chips: vec![args.chip],
                     ..Default::default()
                 },

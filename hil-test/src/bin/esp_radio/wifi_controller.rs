@@ -4,9 +4,9 @@ mod tests {
         clock::CpuClock,
         interrupt::software::SoftwareInterruptControl,
         peripherals::Peripherals,
+        radio::wifi::scan::ScanConfig,
         timer::timg::TimerGroup,
     };
-    use esp_hal::radio::wifi::scan::ScanConfig;
 
     #[init]
     fn init() -> Peripherals {

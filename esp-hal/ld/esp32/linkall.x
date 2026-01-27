@@ -3,3 +3,7 @@ INCLUDE "alias.x"
 INCLUDE "esp32.x"
 INCLUDE "hal-defaults.x"
 
+#IF wifi
+INCLUDE "esp32_provides.x"
+#ENDIF
+

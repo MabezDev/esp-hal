@@ -8,19 +8,21 @@ use core::{
     ptr::{self, addr_of, addr_of_mut},
 };
 
-use crate::hal::time::{Duration, Instant};
 use esp_sync::NonReentrantMutex;
 
 use super::{OSI_FUNCS_TIME_BLOCKING, malloc::free};
-use crate::radio::{
-    ESP_RADIO_LOCK,
-    memory_fence::memory_fence,
-    sys::{
-        c_types::{c_char, c_int, c_uint, c_void},
-        include::malloc,
+use crate::{
+    hal::time::{Duration, Instant},
+    preempt::{current_task, yield_task},
+    radio::{
+        ESP_RADIO_LOCK,
+        memory_fence::memory_fence,
+        sys::{
+            c_types::{c_char, c_int, c_uint, c_void},
+            include::malloc,
+        },
     },
 };
-use crate::preempt::{current_task, yield_task};
 
 #[derive(Clone, Copy, Debug)]
 struct Mutex {

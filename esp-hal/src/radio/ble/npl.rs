@@ -5,15 +5,13 @@ use core::{
 };
 
 use esp_hal::time::Instant;
-use crate::radio::phy::{PhyController, PhyInitGuard};
 
 use super::*;
-use crate::{
-    radio::{
-        compat::{self, OSI_FUNCS_TIME_BLOCKING, common::str_from_c, queue},
-        sys::{c_types::*, include::*},
-        time::{blob_ticks_to_micros, blob_ticks_to_millis, millis_to_blob_ticks},
-    },
+use crate::radio::{
+    compat::{self, OSI_FUNCS_TIME_BLOCKING, common::str_from_c, queue},
+    phy::{PhyController, PhyInitGuard},
+    sys::{c_types::*, include::*},
+    time::{blob_ticks_to_micros, blob_ticks_to_millis, millis_to_blob_ticks},
 };
 
 #[cfg_attr(esp32c2, path = "os_adapter_esp32c2.rs")]
@@ -23,7 +21,7 @@ pub(crate) mod ble_os_adapter_chip_specific;
 
 const EVENT_QUEUE_SIZE: usize = 16;
 
-const TIME_FOREVER: u32 = crate::compat::OSI_FUNCS_TIME_BLOCKING;
+const TIME_FOREVER: u32 = crate::radio::compat::OSI_FUNCS_TIME_BLOCKING;
 
 #[cfg(esp32c2)]
 const OS_MSYS_1_BLOCK_COUNT: i32 = 24;
@@ -839,7 +837,7 @@ unsafe extern "C" fn ble_npl_event_deinit(event: *const ble_npl_event) {
     assert!(!evt.is_null());
 
     unsafe {
-        crate::compat::malloc::free(evt.cast());
+        crate::radio::compat::malloc::free(evt.cast());
     }
 
     unsafe {
@@ -856,7 +854,8 @@ unsafe extern "C" fn ble_npl_event_init(
 
     if unsafe { (*event).dummy } == 0 {
         unsafe {
-            let evt = crate::compat::malloc::calloc(1, core::mem::size_of::<Event>()) as *mut Event;
+            let evt = crate::radio::compat::malloc::calloc(1, core::mem::size_of::<Event>())
+                as *mut Event;
 
             (*evt).event_fn_ptr = func;
             (*evt).ev_arg_ptr = arg;
@@ -999,11 +998,12 @@ unsafe extern "C" fn ble_npl_callout_init(
 
         unsafe {
             let new_callout =
-                crate::compat::malloc::calloc(1, core::mem::size_of::<Callout>()) as *mut Callout;
+                crate::radio::compat::malloc::calloc(1, core::mem::size_of::<Callout>())
+                    as *mut Callout;
             ble_npl_event_init(addr_of_mut!((*new_callout).events), func, args);
             (*callout).dummy = new_callout as i32;
 
-            crate::compat::timer_compat::compat_timer_setfn(
+            crate::radio::compat::timer_compat::compat_timer_setfn(
                 addr_of_mut!((*new_callout).timer_handle),
                 callout_timer_callback_wrapper,
                 callout as *mut c_void,
@@ -1285,11 +1285,11 @@ pub(crate) fn ble_deinit() {
 #[cfg(esp32c2)]
 fn os_msys_buf_alloc() -> bool {
     unsafe {
-        OS_MSYS_INIT_1_DATA = crate::compat::malloc::calloc(
+        OS_MSYS_INIT_1_DATA = crate::radio::compat::malloc::calloc(
             1,
             core::mem::size_of::<OsMembufT>() * SYSINIT_MSYS_1_MEMPOOL_SIZE,
         ) as *mut u32;
-        OS_MSYS_INIT_2_DATA = crate::compat::malloc::calloc(
+        OS_MSYS_INIT_2_DATA = crate::radio::compat::malloc::calloc(
             1,
             core::mem::size_of::<OsMembufT>() * SYSINIT_MSYS_2_MEMPOOL_SIZE,
         ) as *mut u32;
