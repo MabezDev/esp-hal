@@ -6,7 +6,7 @@ mod tests {
         peripherals::Peripherals,
         timer::timg::TimerGroup,
     };
-    use esp_radio::ble::controller::BleConnector;
+    use esp_hal::radio::ble::controller::BleConnector;
 
     fn read_packet(connector: &mut BleConnector, buf: &mut [u8]) -> usize {
         // Read header

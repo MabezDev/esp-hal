@@ -29,7 +29,7 @@ bench = false
 cfg-if = "1"
 
 document-features = "0.2"
-esp-hal = { version = "~1.0", path = "../esp-hal", default-features = false, features = ["requires-unstable"] }
+esp-hal = { version = "~1.0", path = "../esp-hal", default-features = false, features = ["requires-unstable"], optional = true }
 esp-metadata-generated = { version = "0.3.0", path = "../esp-metadata-generated" }
 esp-sync = { version = "0.1.1", path = "../esp-sync" }
 # Make sure these are aligned with esp-radio's dependencies, too!
@@ -61,42 +61,49 @@ log-04 = ["dep:log-04"]
 
 ##
 esp32c2 = [
+  "dep:esp-hal",
   "esp-hal/esp32c2",
   "dep:esp-wifi-sys-esp32c2",
   "esp-metadata-generated/esp32c2",
 ]
 ##
 esp32c3 = [
+  "dep:esp-hal",
   "esp-hal/esp32c3",
   "dep:esp-wifi-sys-esp32c3",
   "esp-metadata-generated/esp32c3",
 ]
 ##
 esp32c6 = [
+  "dep:esp-hal",
   "esp-hal/esp32c6",
   "dep:esp-wifi-sys-esp32c6",
   "esp-metadata-generated/esp32c6",
 ]
 ##
 esp32h2 = [
+  "dep:esp-hal",
   "esp-hal/esp32h2",
   "dep:esp-wifi-sys-esp32h2",
   "esp-metadata-generated/esp32h2",
 ]
 ##
 esp32 = [
+  "dep:esp-hal",
   "esp-hal/esp32",
   "dep:esp-wifi-sys-esp32",
   "esp-metadata-generated/esp32",
 ]
 ##
 esp32s2 = [
+  "dep:esp-hal",
   "esp-hal/esp32s2",
   "dep:esp-wifi-sys-esp32s2",
   "esp-metadata-generated/esp32s2",
 ]
 ##
 esp32s3 = [
+  "dep:esp-hal",
   "esp-hal/esp32s3",
   "dep:esp-wifi-sys-esp32s3",
   "esp-metadata-generated/esp32s3",

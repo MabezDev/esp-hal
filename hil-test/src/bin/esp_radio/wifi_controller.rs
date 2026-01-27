@@ -6,7 +6,7 @@ mod tests {
         peripherals::Peripherals,
         timer::timg::TimerGroup,
     };
-    use esp_radio::wifi::scan::ScanConfig;
+    use esp_hal::radio::wifi::scan::ScanConfig;
 
     #[init]
     fn init() -> Peripherals {
@@ -26,10 +26,10 @@ mod tests {
         esp_rtos::start(timg0.timer0, sw_ints.software_interrupt0);
 
         let (mut controller, _interfaces) =
-            esp_radio::wifi::new(p.WIFI, Default::default()).unwrap();
+            esp_hal::radio::wifi::new(p.WIFI, Default::default()).unwrap();
 
         controller
-            .set_mode(esp_radio::wifi::WifiMode::Station)
+            .set_mode(esp_hal::radio::wifi::WifiMode::Station)
             .unwrap();
         controller.start().unwrap();
 

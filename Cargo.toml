@@ -17,7 +17,6 @@ exclude  = [
     "esp-rtos",
     "esp-radio-rtos-driver",
     "esp-riscv-rt",
-    "esp-radio",
     "esp-storage",
     "esp-sync",
     "examples",

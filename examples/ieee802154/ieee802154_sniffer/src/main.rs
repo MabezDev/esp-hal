@@ -15,7 +15,7 @@ use esp_hal::{
     uart::{self, Uart},
 };
 use esp_println::println;
-use esp_radio::ieee802154::{Config, Ieee802154};
+use esp_hal::radio::ieee802154::{Config, Ieee802154};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 

@@ -35,6 +35,7 @@
 #![no_main]
 
 use embedded_storage::Storage;
+use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
     gpio::{Input, InputConfig, Pull},
@@ -45,7 +46,7 @@ use esp_storage::FlashStorage;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static OTA_IMAGE: &[u8] = include_bytes!("../../../target/ota_image");
+static OTA_IMAGE: &[u8] = include_bytes!("../../../../target/ota_image");
 
 #[main]
 fn main() -> ! {

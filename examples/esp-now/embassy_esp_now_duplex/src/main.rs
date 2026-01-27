@@ -17,7 +17,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::esp_now::{
+use esp_hal::radio::esp_now::{
     BROADCAST_ADDRESS,
     EspNowManager,
     EspNowReceiver,

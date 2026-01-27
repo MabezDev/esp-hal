@@ -42,7 +42,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::{print, println};
-use esp_radio::wifi::{
+use esp_hal::radio::wifi::{
     ModeConfig,
     WifiController,
     WifiDevice,

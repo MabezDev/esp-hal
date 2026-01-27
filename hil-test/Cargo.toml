@@ -113,7 +113,7 @@ esp-hal            = { path = "../esp-hal", features = ["defmt"] }
 esp-rtos           = { path = "../esp-rtos", features = ["defmt"], optional = true }
 esp-storage        = { path = "../esp-storage", optional = true }
 esp-sync           = { path = "../esp-sync" }
-esp-radio          = { path = "../esp-radio", features = ["defmt"], optional = true }
+esp-radio          = { path = "../esp-hal", features = ["defmt"], optional = true }
 esp-radio-rtos-driver = { path = "../esp-radio-rtos-driver", optional = true }
 portable-atomic    = "1.11"
 static_cell        = { version = "2.1.0" }
@@ -139,7 +139,7 @@ default = []
 unstable = ["esp-hal/unstable"]
 
 defmt = ["dep:defmt-rtt"]
-esp-radio = ["dep:esp-radio", "dep:esp-rtos", "dep:esp-radio-rtos-driver", "esp-rtos/esp-radio"]
+esp-hal = ["dep:esp-radio", "dep:esp-rtos", "dep:esp-radio-rtos-driver", "esp-rtos/esp-radio"]
 embassy = ["dep:esp-rtos", "esp-rtos/embassy"]
 
 # Device support (required!):

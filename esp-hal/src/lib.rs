@@ -203,6 +203,10 @@
 #![cfg_attr(docsrs, allow(invalid_doc_attributes))] // doc(auto_cfg = false) requires a new nightly (~2025-10-09+)
 #![cfg_attr(docsrs, doc(auto_cfg = false))]
 #![no_std]
+#![allow(unused_extern_crates)]
+
+extern crate alloc;
+extern crate self as esp_hal;
 
 // MUST be the first module
 mod fmt;
@@ -398,6 +402,19 @@ unstable_driver! {
     #[cfg(soc_has_usb_device)]
     pub mod usb_serial_jtag;
 }
+
+// Radio (wireless) module - includes WiFi, BLE, ESP-NOW, IEEE 802.15.4
+#[cfg(any(feature = "wifi", feature = "ble", feature = "ieee802154"))]
+pub mod radio;
+
+// Aliases to preserve paths expected by the internal radio modules while they live inside esp-hal.
+#[cfg(any(feature = "wifi", feature = "ble", feature = "ieee802154"))]
+/// Re-export of the `esp-hal` crate for use in the radio module.
+pub mod hal {
+    pub use crate::*;
+}
+#[cfg(any(feature = "wifi", feature = "ble", feature = "ieee802154"))]
+pub use esp_radio_rtos_driver as preempt;
 
 /// State of the CPU saved when entering exception or interrupt
 #[instability::unstable]

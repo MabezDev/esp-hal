@@ -24,7 +24,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::{
+use esp_hal::radio::{
     ble::controller::BleConnector,
     wifi::{
         ModeConfig,
