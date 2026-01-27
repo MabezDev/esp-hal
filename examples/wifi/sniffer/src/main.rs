@@ -43,7 +43,7 @@ fn main() -> ! {
 
     // We must initialize some kind of interface and start it.
     let (mut controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     controller.set_mode(wifi::WifiMode::Station).unwrap();
     controller.start().unwrap();

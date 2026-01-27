@@ -101,7 +101,7 @@ async fn main(spawner: Spawner) -> ! {
     let ble_controller: ExternalController<_, 1> = ExternalController::new(connector);
 
     let (controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     let wifi_interface = interfaces.station;
 

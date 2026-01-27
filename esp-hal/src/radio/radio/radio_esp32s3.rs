@@ -1,7 +1,7 @@
 #[cfg(any(feature = "wifi", feature = "ble"))]
 #[allow(unused_imports)]
 use crate::{
-    ESP_RADIO_LOCK,
+    ESP_HAL_LOCK,
     hal::{interrupt, peripherals::Interrupt},
 };
 

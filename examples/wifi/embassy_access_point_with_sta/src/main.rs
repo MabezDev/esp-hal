@@ -80,7 +80,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     let (mut controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     let wifi_ap_device = interfaces.access_point;
     let wifi_sta_device = interfaces.station;
