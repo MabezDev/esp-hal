@@ -23,6 +23,7 @@ pretty_yaml    = { version = "0.6" }
 regex          = { version = "1.11.1", optional = true }
 rustc-demangle = "0.1"
 rocket         = { version = "0.5.1", optional = true }
+schemars       = { version = "1", optional = true }
 semver         = { version = "1.0.23", features = ["serde"] }
 serde          = { version = "1.0.215", default-features = false, features = ["derive"] }
 serde_json     = "1.0.70"
@@ -62,4 +63,4 @@ semver-checks = [ "dep:cargo-semver-checks", "dep:flate2", "dep:temp-file", "dep
 release = ["semver-checks", "dep:opener", "dep:urlencoding", "dep:regex"]
 report = ["dep:regex"]
 rel-check = ["dep:regex"]
-mcp = ["dep:rmcp", "dep:tokio"]
+mcp = ["dep:rmcp", "dep:tokio", "dep:schemars", "esp-metadata/schemars"]
