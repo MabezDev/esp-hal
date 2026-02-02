@@ -135,10 +135,19 @@ Short checklist for PRs (agent-friendly)
 
 Key reference paths (where to look first)
 - `xtask/README.md` — xtask usage and metadata annotations (examples/tests)
+- `xtask/MCP.md` — MCP server documentation for AI agent integration
 - `documentation/CONTRIBUTING.md` and `documentation/DEVELOPER-GUIDELINES.md` — contribution rules
 - `.github/workflows/ci.yml` — canonical CI steps and toolchain versions
-- `.cargo/config.toml` — helpful cargo aliases (`xtask`, `xfmt`, etc.)
+- `.cargo/config.toml` — helpful cargo aliases (`xtask`, `xfmt`, `xmcp`, etc.)
 - `README.md` — project overview and links
+
+MCP Server for AI Agents
+- An MCP (Model Context Protocol) server is available for programmatic access to xtask operations.
+- Build with MCP support: `cargo build -p xtask --features mcp`
+- Start server: `cargo xmcp` (or `cargo xtask --features mcp mcp`)
+- The server exposes all xtask commands as MCP tools (build-examples, fmt-packages, lint-packages, etc.)
+- See `xtask/MCP.md` for full documentation and client configuration examples.
+- When using the MCP server, tools use kebab-case names matching CLI commands.
 
 Final note to the agent
 - Follow this file as your primary orientation. It condenses the commands and checks CI runs and reduces unnecessary repository exploration. Only search further when a commanded step fails or when the task requires additional context not documented here.
