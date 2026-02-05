@@ -672,44 +672,15 @@ impl XtaskMcpServer {
 #[tool_handler]
 impl ServerHandler for XtaskMcpServer {
     fn get_info(&self) -> ServerInfo {
+        // Read instructions from the copilot-instructions.md file
+        let instructions_path = self.workspace.join(".github/copilot-instructions.md");
+        let instructions = std::fs::read_to_string(&instructions_path)
+            .unwrap_or_else(|_| "esp-hal xtask MCP server. See .github/copilot-instructions.md for usage.".into());
+
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some(
-                r#"This MCP server provides access to the esp-hal xtask build system.
-
-## Quick Start
-
-1. **Format code** before submitting: `fmt_packages`
-2. **Lint code**: `lint_packages`
-3. **Check changelog**: `check_changelog`
-4. **Build examples**: `build_examples` with chip parameter
-
-## Common Workflows
-
-### Before Submitting a PR
-1. Run `fmt_packages` to format all code
-2. Run `lint_packages` to check for issues
-3. Run `check_changelog` to verify changelog entries
-4. Run `build_examples` for affected chips
-
-### Building for a Chip
-Use `build_examples` with the `chip` parameter set to one of:
-esp32, esp32c2, esp32c3, esp32c6, esp32h2, esp32s2, esp32s3
-
-### Running CI Locally
-Use `ci` with a chip to run the same checks as CI.
-
-## Available Chips
-- esp32, esp32c2, esp32c3, esp32c6, esp32h2, esp32s2, esp32s3
-
-## Key Packages
-- esp-hal: Main HAL crate
-- esp-radio: WiFi, BLE, IEEE 802.15.4 support
-- esp-alloc, esp-backtrace, esp-println: Support crates
-"#
-                .into(),
-            ),
+            instructions: Some(instructions),
             ..Default::default()
         }
     }
