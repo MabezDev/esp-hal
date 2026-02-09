@@ -89,6 +89,27 @@ log-04                   = { package = "log", version = "0.4", optional = true }
 sha1                     = { version = "0.10", default-features = false, optional = true }
 sha2                     = { version = "0.10", default-features = false, optional = true }
 
+# Radio dependencies (wifi, ble, ieee802154)
+allocator-api2           = { version = "0.3.0", default-features = false, features = ["alloc"], optional = true }
+bt-hci                   = { version = "0.6.0", optional = true }
+byte                     = { version = "0.2.7", optional = true }
+docsplay                 = { version = "0.1", default-features = false, optional = true }
+embassy-net-driver       = { version = "0.2.0", optional = true }
+esp-alloc                = { version = "0.9.0", path = "../esp-alloc", optional = true, default-features = false }
+esp-radio-rtos-driver    = { version = "0.2.0", path = "../esp-radio-rtos-driver", optional = true }
+esp-wifi-sys-esp32       = { version = "0.1.0", optional = true }
+esp-wifi-sys-esp32c2     = { version = "0.1.0", optional = true }
+esp-wifi-sys-esp32c3     = { version = "0.1.0", optional = true }
+esp-wifi-sys-esp32c6     = { version = "0.1.0", optional = true }
+esp-wifi-sys-esp32h2     = { version = "0.1.0", optional = true }
+esp-wifi-sys-esp32s2     = { version = "0.1.0", optional = true }
+esp-wifi-sys-esp32s3     = { version = "0.1.0", optional = true }
+heapless                 = { version = "0.9", optional = true }
+ieee802154               = { version = "0.6.1", optional = true }
+num-derive               = { version = "0.4.2", optional = true }
+num-traits               = { version = "0.2.19", default-features = false, optional = true }
+portable_atomic_enum     = { version = "0.3.1", features = ["portable-atomic"], optional = true }
+
 # Optional dependencies that enable ecosystem support.
 # We could support individually enabling them, but there is no big downside to just
 # enabling them all via the `unstable` feature.
@@ -142,6 +163,112 @@ __usb_otg = [
     "esp-synopsys-usb-otg/esp32sx",
     "esp-synopsys-usb-otg/fs",
 ]
+__has_radio_feature_enabled = []
+
+#! ### Wireless Feature Flags
+
+## Use `esp-alloc` with the `compat` feature for dynamic allocations in radio drivers.
+##
+## If you opt-out, you need to provide implementations for the following functions:
+## - `pub extern "C" fn malloc(size: usize) -> *mut u8`
+## - `pub extern "C" fn malloc_internal(size: usize) -> *mut u8`
+## - `pub extern "C" fn free(ptr: *mut u8)`
+## - `pub extern "C" fn free_internal(ptr: *mut u8)`
+## - `pub extern "C" fn calloc(number: u32, size: usize) -> *mut u8`
+## - `pub extern "C" fn calloc_internal(number: u32, size: usize) -> *mut u8`
+## - `pub extern "C" fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8`
+## - `pub extern "C" fn get_free_internal_heap_size() -> usize;`
+radio-esp-alloc = ["dep:esp-alloc"]
+
+## Enable Wi-Fi support.
+wifi = [
+    "__has_radio_feature_enabled",
+    "dep:allocator-api2",
+    "dep:docsplay",
+    "dep:embassy-net-driver",
+    "dep:esp-radio-rtos-driver",
+    "dep:heapless",
+    "dep:num-derive",
+    "dep:num-traits",
+    "dep:portable_atomic_enum",
+    "radio-esp-alloc",
+]
+
+## Enable Wi-Fi Enterprise Authentication Protocol (EAP) support.
+##
+## ⚠️ This feature is considered unstable.
+wifi-eap = ["wifi"]
+
+## Enable ESP-NOW support.
+##
+## ⚠️ This feature is considered unstable.
+esp-now = ["wifi"]
+
+## Enable sniffer mode support for Wi-Fi.
+##
+## ⚠️ This feature is considered unstable.
+sniffer = ["wifi"]
+
+## Enable BLE support.
+##
+## ⚠️ This feature is considered unstable.
+ble = [
+    "__bluetooth",
+    "__has_radio_feature_enabled",
+    "dep:allocator-api2",
+    "dep:bt-hci",
+    "dep:docsplay",
+    "dep:esp-radio-rtos-driver",
+    "dep:heapless",
+    "dep:num-derive",
+    "dep:num-traits",
+    "dep:portable_atomic_enum",
+    "radio-esp-alloc",
+]
+
+## Software controls Wi-Fi/Bluetooth coexistence.
+## See [ESP-IDF Programming Guide](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/kconfig-reference.html#config-esp-coex-sw-coexist-enable) for details.
+##
+## ⚠️ This feature is considered unstable.
+coex = ["wifi", "ble"]
+
+## Enable Wi-Fi channel state information. See [Wi-Fi Driver](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi.html#wi-fi-channel-state-information).
+##
+## ⚠️ This feature is considered unstable.
+csi = ["wifi"]
+
+## Enable IEEE 802.15.4.
+## Cannot be used together with Wi-Fi.
+##
+## ⚠️ This feature is considered unstable.
+ieee802154 = [
+    "__has_radio_feature_enabled",
+    "dep:allocator-api2",
+    "dep:byte",
+    "dep:docsplay",
+    "dep:esp-radio-rtos-driver",
+    "dep:heapless",
+    "dep:ieee802154",
+    "dep:num-derive",
+    "dep:num-traits",
+    "dep:portable_atomic_enum",
+    "radio-esp-alloc",
+]
+
+## Outputs logs from the pre-compiled Wi-Fi and BLE driver blobs at info level.
+##
+## This feature needs a nightly compiler.
+##
+## ⚠️ This feature is considered unstable.
+print-logs-from-driver = [
+    "esp-wifi-sys-esp32?/sys-logs",
+    "esp-wifi-sys-esp32c2?/sys-logs",
+    "esp-wifi-sys-esp32c3?/sys-logs",
+    "esp-wifi-sys-esp32c6?/sys-logs",
+    "esp-wifi-sys-esp32h2?/sys-logs",
+    "esp-wifi-sys-esp32s2?/sys-logs",
+    "esp-wifi-sys-esp32s3?/sys-logs",
+]
 
 #! ### Runtime support
 #! These features are meant to be enabled by firmware projects. If you are writing a library that
@@ -188,7 +315,9 @@ esp32   = [
     "esp-sync/esp32",
     "esp-metadata-generated/esp32",
     "dep:sha1",
-    "dep:sha2"
+    "dep:sha2",
+    "esp-radio-rtos-driver?/esp32",
+    "dep:esp-wifi-sys-esp32",
 ]
 ##
 esp32c2 = [
@@ -198,6 +327,8 @@ esp32c2 = [
     "esp-rom-sys/esp32c2",
     "esp-sync/esp32c2",
     "esp-metadata-generated/esp32c2",
+    "esp-radio-rtos-driver?/esp32c2",
+    "dep:esp-wifi-sys-esp32c2",
 ]
 ##
 esp32c3 = [
@@ -208,6 +339,8 @@ esp32c3 = [
     "esp-rom-sys/esp32c3",
     "esp-sync/esp32c3",
     "esp-metadata-generated/esp32c3",
+    "esp-radio-rtos-driver?/esp32c3",
+    "dep:esp-wifi-sys-esp32c3",
 ]
 ##
 esp32c5 = [
@@ -227,6 +360,8 @@ esp32c6 = [
     "esp-rom-sys/esp32c6",
     "esp-sync/esp32c6",
     "esp-metadata-generated/esp32c6",
+    "esp-radio-rtos-driver?/esp32c6",
+    "dep:esp-wifi-sys-esp32c6",
 ]
 ##
 esp32h2 = [
@@ -235,6 +370,8 @@ esp32h2 = [
     "esp-rom-sys/esp32h2",
     "esp-sync/esp32h2",
     "esp-metadata-generated/esp32h2",
+    "esp-radio-rtos-driver?/esp32h2",
+    "dep:esp-wifi-sys-esp32h2",
 ]
 ##
 esp32s2 = [
@@ -246,6 +383,8 @@ esp32s2 = [
     "esp-rom-sys/esp32s2",
     "esp-sync/esp32s2",
     "esp-metadata-generated/esp32s2",
+    "esp-radio-rtos-driver?/esp32s2",
+    "dep:esp-wifi-sys-esp32s2",
 ]
 ##
 esp32s3 = [
@@ -256,11 +395,22 @@ esp32s3 = [
     "esp-rom-sys/esp32s3",
     "esp-sync/esp32s3",
     "esp-metadata-generated/esp32s3",
+    "esp-radio-rtos-driver?/esp32s3",
+    "dep:esp-wifi-sys-esp32s3",
 ]
 
 #! ### Logging Feature Flags
 ## Enable logging output using version 0.4 of the `log` crate.
-log-04 = ["dep:log-04"]
+log-04 = [
+    "dep:log-04",
+    "esp-wifi-sys-esp32?/log",
+    "esp-wifi-sys-esp32c2?/log",
+    "esp-wifi-sys-esp32c3?/log",
+    "esp-wifi-sys-esp32c6?/log",
+    "esp-wifi-sys-esp32h2?/log",
+    "esp-wifi-sys-esp32s2?/log",
+    "esp-wifi-sys-esp32s3?/log",
+]
 
 ## Enable logging output using `defmt` and implement `defmt::Format` on certain types.
 defmt = [
@@ -283,7 +433,17 @@ defmt = [
     "fugit/defmt",
     "esp-riscv-rt?/defmt",
     "xtensa-lx-rt?/defmt",
-    "esp-sync/defmt"
+    "esp-sync/defmt",
+    "bt-hci?/defmt",
+    "esp-wifi-sys-esp32?/defmt",
+    "esp-wifi-sys-esp32c2?/defmt",
+    "esp-wifi-sys-esp32c3?/defmt",
+    "esp-wifi-sys-esp32c6?/defmt",
+    "esp-wifi-sys-esp32h2?/defmt",
+    "esp-wifi-sys-esp32s2?/defmt",
+    "esp-wifi-sys-esp32s3?/defmt",
+    "heapless?/defmt",
+    "ieee802154?/defmt",
 ]
 
 #DOC_IF has("psram")

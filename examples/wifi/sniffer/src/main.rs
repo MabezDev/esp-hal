@@ -21,7 +21,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::wifi;
+use esp_hal::radio::wifi;
 use ieee80211::{match_frames, mgmt_frame::BeaconFrame};
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -42,7 +42,7 @@ async fn main(_spawner: embassy_executor::Spawner) -> ! {
 
     // We must initialize some kind of interface and start it.
     let (mut controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     controller.set_mode(wifi::WifiMode::Station).unwrap();
     controller.start_async().await.unwrap();

@@ -80,7 +80,12 @@ default = []
 ## Enable embassy integration (time driver and executors).
 embassy = ["dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time-queue-utils"]
 
+## Enable radio support (WiFi, BLE, etc. from esp-hal).
+## This is the new name for the esp-radio feature.
+radio = ["esp-radio"]
+
 ## Enable esp-radio support.
+## Deprecated: Use "radio" feature instead.
 esp-radio = ["alloc", "dep:esp-radio-rtos-driver"]
 
 # Not documented because we don't currently expose anything that requires alloc, but isn't related to esp-radio.

@@ -16,7 +16,7 @@ use esp_hal::{
     interrupt::software::SoftwareInterruptControl,
     timer::timg::TimerGroup,
 };
-use esp_radio::ble::controller::BleConnector;
+use esp_hal::radio::ble::controller::BleConnector;
 use heapless::Deque;
 use log::info;
 use trouble_host::prelude::*;

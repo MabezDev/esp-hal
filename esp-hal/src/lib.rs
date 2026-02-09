@@ -211,6 +211,10 @@ mod fmt;
 #[macro_use]
 extern crate esp_metadata_generated;
 
+// Required for radio module when radio features are enabled
+#[cfg(feature = "__has_radio_feature_enabled")]
+extern crate alloc;
+
 // can't use instability on inline module definitions, see https://github.com/rust-lang/rust/issues/54727
 #[doc(hidden)]
 macro_rules! unstable_module {
@@ -407,6 +411,10 @@ unstable_driver! {
     #[cfg(usb_serial_jtag)]
     pub mod usb_serial_jtag;
 }
+
+// Radio module (WiFi, BLE, ESP-NOW, IEEE 802.15.4)
+#[cfg(feature = "__has_radio_feature_enabled")]
+pub mod radio;
 
 /// State of the CPU saved when entering exception or interrupt
 #[instability::unstable]

@@ -30,7 +30,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::wifi::{Config, Interface, WifiController, scan::ScanConfig, sta::StationConfig};
+use esp_hal::radio::wifi::{Config, Interface, WifiController, scan::ScanConfig, sta::StationConfig};
 use log::{error, info};
 use sntpc::{NtpContext, NtpTimestampGenerator, get_time};
 
@@ -88,7 +88,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     let (controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     let wifi_interface = interfaces.station;
 

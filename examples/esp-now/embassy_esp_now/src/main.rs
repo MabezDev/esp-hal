@@ -16,7 +16,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::esp_now::{BROADCAST_ADDRESS, PeerInfo};
+use esp_hal::radio::esp_now::{BROADCAST_ADDRESS, PeerInfo};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -33,9 +33,9 @@ async fn main(_spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     let wifi = peripherals.WIFI;
-    let (mut controller, interfaces) = esp_radio::wifi::new(wifi, Default::default()).unwrap();
+    let (mut controller, interfaces) = esp_hal::radio::wifi::new(wifi, Default::default()).unwrap();
     controller
-        .set_mode(esp_radio::wifi::WifiMode::Station)
+        .set_mode(esp_hal::radio::wifi::WifiMode::Station)
         .unwrap();
     controller.start_async().await.unwrap();
 
@@ -53,7 +53,7 @@ async fn main(_spawner: Spawner) -> ! {
                 if !esp_now.peer_exists(&r.info.src_address) {
                     esp_now
                         .add_peer(PeerInfo {
-                            interface: esp_radio::esp_now::EspNowWifiInterface::Station,
+                            interface: esp_hal::radio::esp_now::EspNowWifiInterface::Station,
                             peer_address: r.info.src_address,
                             lmk: None,
                             channel: None,
