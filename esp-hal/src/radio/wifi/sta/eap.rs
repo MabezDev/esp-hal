@@ -6,7 +6,7 @@ use core::fmt;
 use enumset::EnumSet;
 use procmacros::BuilderLite;
 
-use crate::{
+use crate::radio::{
     WifiError,
     wifi::{AuthenticationMethod, Protocol, scan::ScanMethod},
 };

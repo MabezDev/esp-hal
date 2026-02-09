@@ -16,7 +16,13 @@ semver-checked = true
 doc-config = { features = ["unstable", "rt"], append = [
     { if = 'chip_has("psram")', features = ["psram"] },
     { if = 'chip_has("usb_otg_driver_supported")', features = ["__usb_otg"] },
+    # radio related
     { if = 'chip_has("bt_driver_supported")', features = ["__bluetooth"] },
+    { if = 'chip_has("wifi_driver_supported")', features = ["wifi", "wifi-eap", "csi", "esp-now", "sniffer"] },
+    { if = 'chip_has("bt_driver_supported")', features = ["ble"] },
+    { if = 'chip_has("ieee802154_driver_supported")', features = ["ieee802154", "__docs_build"] },
+    { if = 'chip_has("wifi_driver_supported") && chip_has("bt_driver_supported")', features = ["coex"] },
+    { if = 'chip_has("wifi_driver_supported") || chip_has("bt_driver_supported") || chip_has("ieee802154_driver_supported")', features = ["unstable"] },
 ] }
 check-configs = [
     { features = [] },
@@ -25,6 +31,14 @@ check-configs = [
     { features = ["unstable", "rt", "psram"], if = 'chip_has("psram")' },
     { features = ["unstable", "rt", "__usb_otg"], if = 'chip_has("usb_otg_driver_supported")' },
     { features = ["unstable", "rt", "__bluetooth"], if = 'chip_has("bt_driver_supported")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "wifi"], if = 'chip_has("wifi_driver_supported")' },
+    # feature(c_variadic) requires nightly compiler, but we can't configure the toolchain here. Only check xtensa chips, where the compiler has nightly features enabled.
+    { features = ["esp-hal/unstable", "esp-hal/rt", "wifi", "print-logs-from-driver", "unstable"], if = 'chip_has("wifi_driver_supported") && chip_has("xtensa")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "defmt", "wifi", "wifi-eap", "esp-now", "sniffer"], if = 'chip_has("wifi_driver_supported")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "ble"], if = 'chip_has("bt_driver_supported")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "ieee802154"], if = 'chip_has("ieee802154_driver_supported")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "unstable", "defmt", "wifi", "wifi-eap", "esp-now", "sniffer", "ble", "coex"], if = 'chip_has("wifi_driver_supported") && chip_has("bt_driver_supported")' },
+    { features = ["esp-hal/unstable", "esp-hal/rt", "wifi-eap", "unstable"], if = 'chip_has("wifi_driver_supported")' },
 ]
 # Prefer fewer, but more complex clippy rules. A clippy run should cover as much code as possible.
 clippy-configs = [
@@ -164,6 +178,7 @@ __usb_otg = [
     "esp-synopsys-usb-otg/fs",
 ]
 __has_radio_feature_enabled = []
+__docs_build = []
 
 #! ### Wireless Feature Flags
 

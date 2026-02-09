@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Radio feature validation
-    #[cfg(feature = "__has_radio_feature_enabled")]
+    #[cfg(all(feature = "__has_radio_feature_enabled", not(feature = "__docs_build")))]
     {
         // IEEE 802.15.4 and Wi-Fi can't work together
         if cfg!(feature = "ieee802154") && (cfg!(feature = "wifi") || cfg!(feature = "wifi-eap")) {
@@ -134,7 +134,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "coex")]
     {
         assert!(
-            chip.contains("wifi") && chip.contains("bt"),
+            chip.contains("soc_has_wifi") && chip.contains("soc_has_bt"),
             r#"
 
             Wi-Fi/Bluetooth coexistence is not supported on this target.
@@ -237,10 +237,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         #[cfg(feature = "__has_radio_feature_enabled")]
         {
             println!("cargo:rerun-if-changed=./ld/radio/");
-            
+
             // PHY provides linker script
             fs::copy("ld/radio/phy_provides.x", out.join("phy_provides.x"))?;
-            
+
             // Radio driver provides (with wifi/ble conditional preprocessing)
             let radio_config: Vec<String> = vec![
                 #[cfg(feature = "wifi")]
