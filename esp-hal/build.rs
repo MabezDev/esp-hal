@@ -41,6 +41,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
+    // Check unstable radio features
+    if !suppress_panics {
+        if (cfg!(feature = "ble")
+            || cfg!(feature = "coex")
+            || cfg!(feature = "csi")
+            || cfg!(feature = "esp-now")
+            || cfg!(feature = "ieee802154")
+            || cfg!(feature = "sniffer")
+            || cfg!(feature = "wifi-eap"))
+            && !cfg!(feature = "unstable")
+        {
+            panic!(
+                "\n\nThe `unstable` feature was not provided, but is required for the following features: `ble`, `coex`, `csi`, `esp-now`, `ieee802154`, `sniffer`, `wifi-eap`.\n\n"
+            )
+        }
+    }
+
     // Log and defmt are mutually exclusive features. The main technical reason is
     // that allowing both would make the exact panicking behaviour a fragile
     // implementation detail.
@@ -56,6 +73,83 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         See https://doc.rust-lang.org/cargo/reference/config.html#hierarchical-structure
         ");
+    }
+
+    // Radio feature validation
+    #[cfg(feature = "__has_radio_feature_enabled")]
+    {
+        // IEEE 802.15.4 and Wi-Fi can't work together
+        if cfg!(feature = "ieee802154") && (cfg!(feature = "wifi") || cfg!(feature = "wifi-eap")) {
+            panic!("\n\n802.15.4 and Wi-Fi won't work together\n\n");
+        }
+
+        if cfg!(feature = "ble") && !chip.contains("bt") {
+            panic!(
+                r#"
+
+                BLE is not supported on this target.
+
+                "#
+            );
+        }
+
+        if cfg!(feature = "wifi") && !chip.contains("wifi") {
+            panic!(
+                r#"
+
+                Wi-Fi is not supported on this target.
+
+                "#
+            );
+        }
+
+        if cfg!(feature = "ieee802154") && !chip.contains("ieee802154") {
+            panic!(
+                r#"
+
+                IEEE 802.15.4 is not supported on this target.
+
+                "#
+            );
+        }
+
+        // Optimization level warning for radio
+        if let Ok(level) = std::env::var("OPT_LEVEL")
+            && level != "2"
+            && level != "3"
+            && level != "s"
+        {
+            println!(
+                "cargo:warning=Radio features should be built with optimization level 2, 3 or s - yours is {}.",
+                level
+            );
+        }
+    }
+
+    // Radio cfg flags
+    println!("cargo:rustc-check-cfg=cfg(dump_packets)");
+
+    // Coex cfg handling
+    println!("cargo:rustc-check-cfg=cfg(coex)");
+    #[cfg(feature = "coex")]
+    {
+        assert!(
+            chip.contains("wifi") && chip.contains("bt"),
+            r#"
+
+            Wi-Fi/Bluetooth coexistence is not supported on this target.
+
+            "#
+        );
+
+        #[cfg(all(feature = "wifi", feature = "ble"))]
+        println!("cargo:rustc-cfg=coex");
+
+        #[cfg(not(feature = "wifi"))]
+        println!("cargo:warning=coex is enabled but wifi is not");
+
+        #[cfg(not(feature = "ble"))]
+        println!("cargo:warning=coex is enabled but ble is not");
     }
 
     // Define all necessary configuration symbols for the configured device:
@@ -138,6 +232,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         // remaining linker scripts which are common to all devices:
         copy_dir_all(&config_symbols, &cfg, "ld/sections", &out)?;
         copy_dir_all(&config_symbols, &cfg, format!("ld/{}", chip.name()), &out)?;
+
+        // Radio linker scripts (PHY and radio driver provides)
+        #[cfg(feature = "__has_radio_feature_enabled")]
+        {
+            println!("cargo:rerun-if-changed=./ld/radio/");
+            
+            // PHY provides linker script
+            fs::copy("ld/radio/phy_provides.x", out.join("phy_provides.x"))?;
+            
+            // Radio driver provides (with wifi/ble conditional preprocessing)
+            let radio_config: Vec<String> = vec![
+                #[cfg(feature = "wifi")]
+                "wifi".to_string(),
+                #[cfg(feature = "ble")]
+                "ble".to_string(),
+            ];
+            preprocess_file(
+                &radio_config,
+                &cfg,
+                format!("ld/radio/{}_provides.x", chip.name()),
+                out.join("libesp-hal-radio.a"),
+            )?;
+            // Exploit the fact that linkers treat an unknown library format as a
+            // linker script
+            println!("cargo:rustc-link-lib=esp-hal-radio");
+        }
     }
 
     Ok(())

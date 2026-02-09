@@ -24,7 +24,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::println;
-use esp_radio::{
+use esp_hal::radio::{
     ble::controller::BleConnector,
     wifi::{Config, Interface, WifiController, scan::ScanConfig, sta::StationConfig},
 };
@@ -94,7 +94,7 @@ async fn main(spawner: Spawner) -> ! {
     let ble_controller: ExternalController<_, 1> = ExternalController::new(connector);
 
     let (controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     let wifi_interface = interfaces.station;
 

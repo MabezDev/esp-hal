@@ -42,7 +42,7 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_println::{print, println};
-use esp_radio::wifi::{
+use esp_hal::radio::wifi::{
     Config,
     Interface,
     WifiController,
@@ -79,7 +79,7 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     let (mut controller, interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
+        esp_hal::radio::wifi::new(peripherals.WIFI, Default::default()).unwrap();
 
     let wifi_ap_device = interfaces.access_point;
     let wifi_sta_device = interfaces.station;
@@ -335,10 +335,10 @@ async fn connection(mut controller: WifiController<'static>) {
                             Either::Second(event) => {
                                 if let Ok(event) = event {
                                     match event {
-                                    esp_radio::wifi::AccessPointStationEventInfo::Connected(access_point_station_connected_info) => {
+                                    esp_hal::radio::wifi::AccessPointStationEventInfo::Connected(access_point_station_connected_info) => {
                                         println!("Station connected: {:?}", access_point_station_connected_info);
                                     }
-                                    esp_radio::wifi::AccessPointStationEventInfo::Disconnected(access_point_station_disconnected_info) => {
+                                    esp_hal::radio::wifi::AccessPointStationEventInfo::Disconnected(access_point_station_disconnected_info) => {
                                         println!("Station disconnected: {:?}", access_point_station_disconnected_info);
                                     }
                                 }
