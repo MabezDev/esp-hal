@@ -61,6 +61,10 @@ enum Cli {
     #[cfg(feature = "rel-check")]
     #[clap(subcommand)]
     RelCheck(relcheck::RelCheckCmds),
+    /// Start an MCP (Model Context Protocol) server over stdio.
+    /// Use `cargo xmcp` to start the server.
+    #[cfg(feature = "mcp")]
+    McpServer,
 }
 
 #[derive(Debug, Args)]
@@ -167,10 +171,26 @@ struct UpdateMetadataArgs {
 // Application
 
 fn main() -> Result<()> {
-    let mut builder =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
-    builder.target(env_logger::Target::Stdout);
-    builder.init();
+    // In MCP mode, we must NOT initialize env_logger: stdout is reserved for
+    // JSON-RPC messages. We redirect the `log` facade to stderr instead.
+    #[cfg(feature = "mcp")]
+    let is_mcp = std::env::args().any(|a| a == "mcp-server");
+    #[cfg(not(feature = "mcp"))]
+    let is_mcp = false;
+
+    if !is_mcp {
+        let mut builder =
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+        builder.target(env_logger::Target::Stdout);
+        builder.init();
+    } else {
+        // In MCP mode, send logs to stderr so they don't corrupt the JSON-RPC
+        // stream on stdout.
+        let mut builder =
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"));
+        builder.target(env_logger::Target::Stderr);
+        builder.init();
+    }
 
     let workspace =
         std::env::current_dir().with_context(|| format!("Failed to get the current dir!"))?;
@@ -234,6 +254,14 @@ fn main() -> Result<()> {
         Cli::GenerateReport(args) => generate_report::generate_report(&workspace, args),
         #[cfg(feature = "rel-check")]
         Cli::RelCheck(relcheck) => relcheck::run_rel_check(relcheck),
+        #[cfg(feature = "mcp")]
+        Cli::McpServer => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("Failed to create tokio runtime")?;
+            rt.block_on(xtask::mcp::run_mcp_server(workspace))
+        }
     }
 }
 
