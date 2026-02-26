@@ -54,7 +54,10 @@ use portable_atomic::AtomicU8;
 #[cfg_attr(esp32s3, path = "esp32s3/mod.rs")]
 pub(crate) mod implem;
 
+#[cfg(feature = "unstable")]
 pub use implem::*;
+#[cfg(not(feature = "unstable"))]
+pub(crate) use implem::*;
 
 /// The bit field for get access to efuse data
 #[derive(Debug, Clone, Copy)]
