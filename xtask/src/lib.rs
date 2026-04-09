@@ -516,6 +516,30 @@ impl Package {
             .expect("semver-checked must be a boolean")
     }
 
+    /// Return `true` if this package's Cargo.toml declares
+    /// `[package.metadata.espressif] forever-unstable = true`.
+    ///
+    /// Perma-unstable packages are intentionally kept on patch releases
+    /// because they will never ship a stable release. If the key is missing,
+    /// returns `false`. If the key is present but not a boolean, logs a
+    /// warning and defaults to `true` (the safer over-restriction).
+    #[cfg(feature = "release")]
+    pub(crate) fn is_forever_unstable(&self) -> bool {
+        let toml = self.toml();
+        let Some(metadata) = toml.espressif_metadata() else {
+            return false;
+        };
+        let Some(Item::Value(forever_unstable)) = metadata.get("forever-unstable") else {
+            return false;
+        };
+        if let Value::Boolean(forever_unstable) = forever_unstable {
+            *forever_unstable.value()
+        } else {
+            log::warn!("Invalid value for 'forever-unstable' in metadata - must be a boolean");
+            true
+        }
+    }
+
     #[cfg(feature = "semver-checks")]
     pub(crate) fn clean_semver_check(&self, dest_path: &Path) -> anyhow::Result<()> {
         if self == &Package::EspRomSys && dest_path.exists() {

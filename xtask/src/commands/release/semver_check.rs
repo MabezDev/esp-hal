@@ -129,24 +129,27 @@ pub mod checker {
         Ok(())
     }
 
+    /// Return the stricter (larger) of two `ReleaseType`s.
+    ///
+    /// `ReleaseType` is `#[non_exhaustive]`; an unknown variant panics
+    /// loudly so the release is stopped and the new variant can be
+    /// handled explicitly, rather than silently producing a potentially
+    /// wrong bump.
+    pub(crate) fn stricter(a: ReleaseType, b: ReleaseType) -> ReleaseType {
+        match (a, b) {
+            (ReleaseType::Major, _) | (_, ReleaseType::Major) => ReleaseType::Major,
+            (ReleaseType::Minor, _) | (_, ReleaseType::Minor) => ReleaseType::Minor,
+            (ReleaseType::Patch, ReleaseType::Patch) => ReleaseType::Patch,
+            _ => panic!("unknown cargo_semver_checks::ReleaseType variant: {a:?} / {b:?}"),
+        }
+    }
+
     /// Determine the minimum required version bump for the specified package and chips.
     pub fn min_package_update(
         workspace: &Path,
         package: Package,
         chips: &[Chip],
     ) -> anyhow::Result<ReleaseType> {
-        fn stricter(a: ReleaseType, b: ReleaseType) -> ReleaseType {
-            fn index_of(rt: ReleaseType) -> usize {
-                match rt {
-                    ReleaseType::Major => 2,
-                    ReleaseType::Minor => 1,
-                    ReleaseType::Patch => 0,
-                    _ => unreachable!(),
-                }
-            }
-            if index_of(b) > index_of(a) { b } else { a }
-        }
-
         let mut highest_result = ReleaseType::Patch;
         for chip in chips {
             let result = minimum_update(workspace, package, *chip)?;

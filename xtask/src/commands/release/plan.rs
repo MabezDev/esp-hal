@@ -6,12 +6,15 @@ use clap::Args;
 use esp_metadata::Chip;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
-use toml_edit::{Item, Value};
 
 use crate::{
     Package,
     cargo::CargoToml,
-    commands::{VersionBump, checker::min_package_update, do_version_bump},
+    commands::{
+        VersionBump,
+        checker::{min_package_update, stricter},
+        do_version_bump,
+    },
     git::current_branch,
 };
 
@@ -132,34 +135,20 @@ pub fn plan(workspace: &Path, args: PlanArgs) -> Result<()> {
 
     for package in sorted.iter().copied() {
         let amount = if changed[&package] {
-            let amount = if package.is_semver_checked() {
-                min_package_update(workspace, package, &all_chips)?
-            } else {
-                let forever_unstable = if let Some(metadata) =
-                    package_tomls[&package].espressif_metadata()
-                    && let Some(Item::Value(forever_unstable)) = metadata.get("forever-unstable")
-                {
-                    // Special case: some packages are perma-unstable, meaning they won't ever have
-                    // a stable release. For these packages, we always use a
-                    // patch release.
-                    if let Value::Boolean(forever_unstable) = forever_unstable {
-                        *forever_unstable.value()
-                    } else {
-                        log::warn!(
-                            "Invalid value for 'forever-unstable' in metadata - must be a boolean"
-                        );
-                        true
-                    }
-                } else {
-                    false
-                };
+            let forever_unstable = package.is_forever_unstable();
 
-                if forever_unstable {
-                    ReleaseType::Patch
-                } else {
-                    ReleaseType::Minor
-                }
+            // If the package is semver-checked, the result escalates the bump if the
+            // tool detects a breaking change. It never *downgrades* the bump: any
+            // changed stable package deserves at least a minor bump even when
+            // cargo-semver-checks reports no breaking changes, because additive API
+            // changes are invisible to the breaking-change analysis.
+            let semver_bump = if package.is_semver_checked() {
+                Some(min_package_update(workspace, package, &all_chips)?)
+            } else {
+                None
             };
+
+            let amount = determine_version_bump(forever_unstable, semver_bump);
 
             log::debug!("{} needs {:?} version bump", package, amount);
             Some(amount)
@@ -394,6 +383,25 @@ fn related_crates(workspace: &Path, package: Package) -> Vec<Package> {
     })
 }
 
+/// Determine the required version bump for a package that has changed since
+/// its last release, flooring at `Minor` (or `Patch` for `forever-unstable`
+/// packages) and escalating to any stricter result from `cargo-semver-checks`.
+fn determine_version_bump(
+    forever_unstable: bool,
+    semver_checks_result: Option<ReleaseType>,
+) -> ReleaseType {
+    let floor = if forever_unstable {
+        ReleaseType::Patch
+    } else {
+        ReleaseType::Minor
+    };
+
+    match semver_checks_result {
+        Some(result) => stricter(floor, result),
+        None => floor,
+    }
+}
+
 fn topological_sort(dep_graph: &HashMap<Package, Vec<Package>>) -> Vec<Package> {
     let mut sorted = Vec::new();
     let mut dep_graph = dep_graph.clone();
@@ -453,6 +461,84 @@ mod tests {
                 Package::EspRadio,
                 Package::EspRtos
             ]
+        );
+    }
+
+    #[test]
+    fn test_stricter() {
+        assert_eq!(
+            stricter(ReleaseType::Patch, ReleaseType::Patch),
+            ReleaseType::Patch
+        );
+        assert_eq!(
+            stricter(ReleaseType::Patch, ReleaseType::Minor),
+            ReleaseType::Minor
+        );
+        assert_eq!(
+            stricter(ReleaseType::Minor, ReleaseType::Patch),
+            ReleaseType::Minor
+        );
+        assert_eq!(
+            stricter(ReleaseType::Minor, ReleaseType::Major),
+            ReleaseType::Major
+        );
+        assert_eq!(
+            stricter(ReleaseType::Major, ReleaseType::Minor),
+            ReleaseType::Major
+        );
+        assert_eq!(
+            stricter(ReleaseType::Major, ReleaseType::Major),
+            ReleaseType::Major
+        );
+    }
+
+    #[test]
+    fn test_determine_version_bump_non_semver_checked() {
+        // Non-semver-checked stable packages get a minor bump for any change.
+        assert_eq!(determine_version_bump(false, None), ReleaseType::Minor);
+
+        // Non-semver-checked forever-unstable packages stay on patch.
+        assert_eq!(determine_version_bump(true, None), ReleaseType::Patch);
+    }
+
+    #[test]
+    fn test_determine_version_bump_semver_checked_no_breakage() {
+        // Regression test for the "patch bump for esp-hal" bug: a stable,
+        // semver-checked package whose changes are purely additive (so
+        // cargo-semver-checks reports `Patch`) must still get a `Minor`
+        // bump, because cargo-semver-checks does not see additive changes
+        // as warranting a version increment at all.
+        assert_eq!(
+            determine_version_bump(false, Some(ReleaseType::Patch)),
+            ReleaseType::Minor
+        );
+    }
+
+    #[test]
+    fn test_determine_version_bump_semver_checked_breaking() {
+        // When cargo-semver-checks detects a breaking change, the bump is
+        // escalated to `Major` regardless of the floor.
+        assert_eq!(
+            determine_version_bump(false, Some(ReleaseType::Major)),
+            ReleaseType::Major
+        );
+        assert_eq!(
+            determine_version_bump(true, Some(ReleaseType::Major)),
+            ReleaseType::Major
+        );
+    }
+
+    #[test]
+    fn test_determine_version_bump_semver_checked_forever_unstable() {
+        // Forever-unstable, semver-checked packages track the semver-check
+        // result but floor at `Patch`.
+        assert_eq!(
+            determine_version_bump(true, Some(ReleaseType::Patch)),
+            ReleaseType::Patch
+        );
+        assert_eq!(
+            determine_version_bump(true, Some(ReleaseType::Minor)),
+            ReleaseType::Minor
         );
     }
 
