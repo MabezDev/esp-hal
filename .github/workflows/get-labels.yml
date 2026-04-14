@@ -23,15 +23,29 @@ jobs:
         id: list
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER_FROM_EVENT: ${{ github.event.pull_request.number }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            LABELS=$(printf "%b" "${{ join(github.event.pull_request.labels.*.name, '\n') }}")
-          elif [[ "${{ github.event_name }}" == "merge_group" ]]; then
-            COMMIT_MSG=$(git log -1 --pretty=%B)
-            PR_NUMBER=$(echo "$COMMIT_MSG" | grep -o "#[0-9]*" | grep -o "[0-9]*" || true)
-            if [ -n "$PR_NUMBER" ]; then
-              LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || true)
-            fi
+          # Resolve a PR number for the current run, then fetch its labels.
+          # One consistent approach across every trigger type.
+          case "$EVENT_NAME" in
+            pull_request)
+              PR_NUMBER="$PR_NUMBER_FROM_EVENT"
+              ;;
+            merge_group)
+              # Merge queue commit messages contain "(#NNNN)" referencing the PR.
+              PR_NUMBER=$(git log -1 --pretty=%B | grep -oE '#[0-9]+' | head -n1 | tr -d '#' || true)
+              ;;
+            *)
+              # workflow_dispatch (or anything else): match the current branch
+              # to an open PR, if one exists.
+              PR_NUMBER=$(gh pr list --head "$GITHUB_REF_NAME" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+              ;;
+          esac
+
+          LABELS=""
+          if [ -n "$PR_NUMBER" ]; then
+            LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || true)
           fi
 
           PACKAGES=""
