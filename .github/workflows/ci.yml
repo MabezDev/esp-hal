@@ -35,10 +35,35 @@ jobs:
   get-labels:
     uses: ./.github/workflows/get-labels.yml
 
+  # Detect which paths changed so we can skip expensive chip builds for
+  # non-HAL changes (e.g. xtask-only, extras-only, docs-only PRs).
+  # Always returns true for merge_group / workflow_dispatch events.
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      hal: ${{ github.event_name != 'pull_request' || steps.filter.outputs.hal == 'true' }}
+    steps:
+      - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
+      - uses: dorny/paths-filter@v3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            hal:
+              - 'esp-*/**'
+              - 'xtensa-*/**'
+              - 'examples/**'
+              - 'hil-test/**'
+              - 'qa-test/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+
   # --------------------------------------------------------------------------
   # Build Packages
   esp-hal:
-    needs: get-labels
+    needs: [get-labels, detect-changes]
     runs-on: macos-m1-self-hosted
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -48,7 +73,7 @@ jobs:
       STATIC_IP: 1.1.1.1
       GATEWAY_IP: 1.1.1.1
       HOST_IP: 1.1.1.1
-      SKIP_CI: ${{ contains(needs.get-labels.outputs.labels, 'skip-ci-non-code-change') }}
+      SKIP_CI: ${{ contains(needs.get-labels.outputs.labels, 'skip-ci-non-code-change') || needs.detect-changes.outputs.hal == 'false' }}
 
     strategy:
       fail-fast: false
@@ -143,9 +168,10 @@ jobs:
         run: cd extras/ieee802154-sniffer && cargo build
 
   docs:
-    needs: get-labels
-    if: ${{ github.event_name != 'pull_request' ||
-      !contains(needs.get-labels.outputs.labels, 'skip-ci-non-code-change') }}
+    needs: [get-labels, detect-changes]
+    if: ${{ (github.event_name != 'pull_request' ||
+      !contains(needs.get-labels.outputs.labels, 'skip-ci-non-code-change'))
+      && needs.detect-changes.outputs.hal != 'false' }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -190,10 +216,10 @@ jobs:
   # MSRV
 
   msrv:
-    needs: get-labels
+    needs: [get-labels, detect-changes]
     runs-on: ubuntu-latest
     env:
-      SKIP_CI: ${{ contains(needs.get-labels.outputs.labels, 'skip-ci-non-code-change') }}
+      SKIP_CI: ${{ contains(needs.get-labels.outputs.labels, 'skip-ci-non-code-change') || needs.detect-changes.outputs.hal == 'false' }}
 
     strategy:
       fail-fast: false
