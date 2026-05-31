@@ -125,11 +125,14 @@ jobs:
           toolchain: nightly
           components: rust-src
 
-      # Cross-compile xtask for HIL runners
+      # Cross-compile xtask for HIL runners. xtask is a host tool, so pin it to a
+      # standard toolchain — the ambient default is `esp` on xtensa-only runs
+      # (xtensa-toolchain sets default: true), which can't add std for these targets.
       - name: Install cross-compilation targets
         run: |
-          rustup target add aarch64-unknown-linux-gnu
-          rustup target add armv7-unknown-linux-gnueabihf
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable aarch64-unknown-linux-gnu
+          rustup target add --toolchain stable armv7-unknown-linux-gnueabihf
 
       - uses: taiki-e/install-action@v2
         with:
@@ -140,8 +143,8 @@ jobs:
 
       - name: Build xtask for HIL runners
         run: |
-          cross build --release --target armv7-unknown-linux-gnueabihf -p xtask
-          cross build --release --target aarch64-unknown-linux-gnu -p xtask
+          cross +stable build --release --target armv7-unknown-linux-gnueabihf -p xtask
+          cross +stable build --release --target aarch64-unknown-linux-gnu -p xtask
 
       - name: Upload xtask artifacts
         uses: actions/upload-artifact@v6
