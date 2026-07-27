@@ -1,12 +1,18 @@
 # `esp_hal::flash` — Flash Storage Driver
 
-Driver for SPI NOR flash, replacing `esp-storage`. `FlashStorage<'d, Dm>` works with both internal boot flash (SPI0/SPI1) and external SPI flash chips (SPI2, and SPI3 where present). The constructor input — the `FLASH` peripheral singleton, or a user-configured `Spi` driver for external chips — is immediately consumed into a private backend enum, so the *only* public type parameter is the [`DriverMode`] (`Blocking`/`Async`), following the esp-hal convention that every applicable driver offers both blocking and async APIs.
+Driver for the **internal boot flash** (SPI0/SPI1), replacing `esp-storage`. The constructor consumes the `FLASH` peripheral singleton; the only public type parameter is [`DriverMode`] (`Blocking`/`Async`), following the esp-hal convention that every applicable driver offers both blocking and async APIs.
 
-The backend is chosen at runtime (internal vs SPI); the driver mode is a compile-time type-state. Chip capability is resolved **per operation**: each operation uses the best primitive the chip has, and only operations the chip truly cannot execute fail, with `Error::NotSupported` at the point of use (see the per-operation capability table). The async API is interrupt/DMA-driven on the external SPI backend; on the internal backend it runs the chunked blocking ROM ops, yielding only *between* chunks (XIP forbids suspending mid-ROM-call — the executor itself lives in the flash being written; between chunks the cache is live and yielding is safe).
+**Scope ([A12](#a12--internal-only-scope-the-external-backend-splits-out))**: this driver is internal-only. An earlier revision folded external SPI NOR chips (SPI2/3) into the same type behind a runtime-erased backend enum; that erasure conflated two kinds of `NotSupported` — *contingent* chip gaps (S2's `erase_chip`: meaningful, liftable later — and indeed since closed, [A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol)) and *structural* impossibilities (`mmap` needs the cache/MMU path and encrypted access the XTS-AES engine, both of which exist only on SPI0/SPI1 — no external chip can ever have them, and which backend you have is known at the constructor). The two backends also shared almost nothing beyond the operation list, so the erased `Config`/`Error`/Limitations smeared internal-only and external-only concerns across both. External flash is therefore a separate *future* driver, unified with this one through the embedded-storage traits rather than a shared concrete type. Everything external — and every other deferred piece — lives in [FLASH-DEFERRED.md](FLASH-DEFERRED.md).
 
-`FlashChipConfig` is the data-driven chip override — it carries the command bytes, timings, and geometry `FlashStorage` uses to drive the chip. There is no chip-*driver* trait; the config *is* the driver. Genuine per-chip *behavior* (quad-enable, 32-bit addressing, erase-suspend) is the only thing that would later justify a trait — added in unstable space if and when it's actually needed.
+Chip capability is still resolved **per operation**, and only operations the chip truly cannot execute fail, with `Error::NotSupported` at the point of use. After the scope cut — and the re-investigation of the suspected S2 `erase_chip` gap ([B1](#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap) correction, [A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol)) — **no capability gap remains**: every operation works on all 10 chips through the dedicated `esp_rom_spiflash_*` ROM functions (on S2, chip-erase through the raw `SPIEraseChip` export).
+
+There is **no chip configuration** ([A13](#a13--no-chip-configuration-at-launch)): a boot flash the ROM booted is, by construction, drivable with the ROM's default command set — the "custom chip" user was always the external-chip user. `Config` ships `#[non_exhaustive]` and near-empty — the multi-core strategy plus an **unstable** capacity override, the escape hatch when detection fails — growing further parameters only as real needs appear. The full `ChipConfig` vocabulary is shelved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md).
+
+The async API runs the chunked blocking ROM ops, yielding only *between* chunks (XIP forbids suspending mid-ROM-call — the executor itself lives in the flash being written; between chunks the cache is live and yielding is safe).
 
 Per DEVELOPER-GUIDELINES (API Surface, since #5854): **all of this lands unstable** (`unstable_driver!`), and the [stabilization target](#stabilization-target) is promoted deliberately once the API has settled.
+
+How to read this document: the body is the design — linear and normative. Dense evidence, decision rationale, and esp-storage internals live in the appendices — [Appendix A (decision log)](#appendix-a--decision-log), [Appendix B (ROM capability evidence)](#appendix-b--rom-capability-evidence), [Appendix C (esp-storage internals)](#appendix-c--esp-storage-internals-evidence) — and are referenced inline as linked tags like [A4](#a4--multi-core-stable-default-autopark) or [C3](#c3--locking-and-multicore). (Inside code blocks the tags appear un-linked; they name the same entries.) Deferred/extracted material (external driver, chip overrides, custom-command evidence) is in [FLASH-DEFERRED.md](FLASH-DEFERRED.md). What to build, in what order, and which files change is **not** here — that is [FLASH-PLAN.md](FLASH-PLAN.md).
 
 ---
 
@@ -14,35 +20,41 @@ Per DEVELOPER-GUIDELINES (API Surface, since #5854): **all of this lands unstabl
 
 This design ports and reorganizes; it must not silently regress the current crate. Facts the rest of the document builds on:
 
-- Read/write/erase go through ROM `esp_rom_spiflash_*` on **all 10 chips** (`esp-storage/src/ll.rs`). ESP32's incomplete ROM is patched by a static library in `esp-rom-sys` (`libs/esp32/libesp_rom.a`, #3688). There is **no** SPI1 register path for standard operations — only RDID capacity detection touches SPI1 registers (`hardware.rs`).
-- The constructor already takes the `peripherals.FLASH` virtual singleton. It exists on all 10 chips in esp-metadata but is currently **unstable** (no `stable = true` in any `soc.toml`).
-- Erase and write are already **chunked**: per-sector/block/page ROM calls, each inside its own critical section. Interrupts re-enable between chunks; the cache is disabled only inside each ROM call. Worst-case interrupts-off window ≈ one 64 KiB block erase.
-- The critical section is **current-core only** (`esp_sync::RawMutex`). Cross-core safety is `MultiCoreStrategy` (`Error` default, `AutoPark`, unsafe `Ignore`) and guards write/erase only — **reads are unguarded today**.
-- **Encrypted flash is load-bearing**: `read_encrypted`/`write_encrypted` exist, `esp-bootloader-esp-idf` routes every partition access through `is_effectively_encrypted()` (`FlashRegion::read/write`), and since #5857 exposes `NorFlashRegion` / `EncryptedNorFlashRegion` wrapper views (`as_nor_flash()` / `as_nor_flash_encrypted()`), the encrypted one with `WRITE_SIZE = 4096` because the ROM encrypts whole sectors. `hil-test/src/bin/storage.rs` covers the encrypted path on hardware.
-- **MMU internals** (`esp-storage/src/mmu.rs`) exist for encrypted reads and cache invalidation, including the P4 dual-map variant.
-- `pub mod ll` has external consumers: `hil-test/src/bin/alloc_psram.rs` calls `esp_storage::ll::spiflash_write`.
-- An `emulation` feature (esp-hal is an *optional* dep of esp-storage) swaps `hardware.rs` for `stub.rs`; **esp-bootloader-esp-idf's host tests run on it** via `cargo xtask host-tests`.
-- Capacity detection: ESP32 reads `g_rom_flashchip.chip_size` (RDID unreliable there); all others RDID via SPI1 registers. An unknown ID yields capacity **0**, after which every operation fails `OutOfBounds` with no indication why.
-- `esp-storage/build.rs` rejects opt-level 0/1 on ESP32 — a timing-related requirement predating #3688, from when the flash routines were compiled from Rust. **Dropped** for the new driver (resolved question 2): the timing-sensitive code is now precompiled in the ESP32 static ROM lib and the remaining Rust is thin `#[ram]` wrappers, identical in shape to the other nine chips (which never had the requirement).
-- Word-aligned write sources are passed straight to the ROM with no flash-residency check — writing a `const` array from `.rodata` reads flash while the cache is off. Latent footgun; this design closes it (see write path).
+- Read/write/erase go through ROM `esp_rom_spiflash_*` on **all 10 chips**; ESP32's incomplete ROM is patched by a static library in `esp-rom-sys`. There is **no** SPI1 register path for standard operations — only RDID capacity detection touches SPI1 registers. ([C1](#c1--rom-call-sites))
+- The constructor already takes the `peripherals.FLASH` virtual singleton. It exists on all 10 chips in esp-metadata but is currently **unstable**.
+- Erase and write are already **chunked**: per-sector/block/page ROM calls, each inside its own critical section. Interrupts re-enable between chunks; the cache is disabled only inside each ROM call. Worst-case interrupts-off window ≈ one 64 KiB block erase. ([C2](#c2--chunking-and-critical-sections))
+- The critical section suppresses interrupts on the **executing core only** and cannot keep the other core's XIP off the flash. That gap is what `MultiCoreStrategy` exists for, and it guards write/erase only — **reads are unguarded today**. ([C3](#c3--locking-and-multicore))
+- **Encrypted flash is load-bearing**: `esp-bootloader-esp-idf` routes every partition access through `is_effectively_encrypted()` and exposes `NorFlashRegion` / `EncryptedNorFlashRegion` wrapper views (#5857). The encrypted view's `WRITE_SIZE = 4096` is **esp-storage's wrapper contract, not a ROM constraint** — the ROM primitive is 32-byte-granular; the wrapper adds a whole-sector RMW with overwrite semantics (it erases internally) and errors when flash encryption is off. Hardware coverage exists only in the encryption-off degenerate mode. ([C4](#c4--encrypted-access-and-mmu))
+- **MMU internals** exist for encrypted reads and cache invalidation, including the P4 dual-map variant. ([C4](#c4--encrypted-access-and-mmu))
+- `pub mod ll` has external consumers (`hil-test/src/bin/alloc_psram.rs`).
+- An `emulation` feature swaps the hardware layer for a stub; **esp-bootloader-esp-idf's host tests run on it** via `cargo xtask host-tests`.
+- Capacity detection: ESP32 reads `g_rom_flashchip.chip_size` (RDID unreliable there); all others RDID via SPI1 registers. An unknown ID yields capacity **0**, after which every operation fails `OutOfBounds` with no indication why. ([C5](#c5--capacity-detection))
+- `esp-storage/build.rs` rejects opt-level 0/1 on ESP32 — a timing requirement from when the flash routines were compiled from Rust. **Dropped** for the new driver. ([A2](#a2--esp32-opt-level-requirement-dropped))
+- Buffers are passed straight to the ROM with no residency check — a flash-resident (`.rodata`) write source, or any PSRAM-resident buffer in either direction, is read/written while the cache is off. Latent footguns; this design closes all of them (see the buffer-residency rules under the write path). ([C6](#c6--buffers-and-read_size))
 
 ---
 
-## Module structure
+## The new design
+
+Everything from here to the [stabilization target](#stabilization-target) is the new driver — normative, describing nothing that exists today. From this point on, esp-storage appears only as ported semantics or evidence ([Appendix C](#appendix-c--esp-storage-internals-evidence)).
+
+### Module structure
 
 ```
 esp_hal::flash
 ├── mod.rs               — public types, re-exports
-├── storage.rs           — FlashStorage<'d, Dm> (backend-erased, mode type-state)
-└── host.rs              — FlashBackend (ops-shaped), FlashCommand lowering (ALL PRIVATE)
+├── driver.rs            — Flash<'d, Dm> (mode type-state)
+├── rom.rs               — private thin ROM wrappers: chunk loops, critical
+│                          sections, park/unpark, bounce staging (ALL PRIVATE)
+└── mmu.rs               — private MMU page mapping for encrypted reads
+                           (ported from esp-storage, incl. P4 dual-map)
 ```
 
 Public items in `mod.rs`:
 - `Config`, `ConfigError`
 - `Error`
-- `FlashChipConfig`, `FlashChipInfo`
+- `ChipInfo`
 - `MultiCoreStrategy` (multi-core chips, unstable)
-- `MappedFlash` (unstable, returned by the inherent `mmap`)
 - re-uses crate-level [`DriverMode`], [`Blocking`], [`Async`] (no re-export)
 
 ### Module documentation
@@ -56,19 +68,21 @@ Follows the current doc conventions: `procmacros::doc_replace` with `{before_sni
 //! # Flash Storage
 //!
 //! ## Overview
-//! Driver for SPI NOR flash chips. Works with both the internal boot
-//! flash (SPI0/SPI1) and external SPI flash chips (SPI2/SPI3).
+//! Driver for the internal boot flash (SPI0/SPI1).
 //! {documentation}
 //!
 //! ## Configuration
-//! The default [`Config`] auto-detects flash geometry from ROM/RDID.
-//! For non-standard chips, set a [`FlashChipConfig`] on [`Config`] via
-//! `with_chip` to override geometry, commands, and timing.
+//! The default [`Config`] auto-detects flash geometry from ROM/RDID;
+//! detection failure surfaces as [`ConfigError::DetectionFailed`] at
+//! construction; the unstable capacity override on [`Config`] is the
+//! escape hatch. Beyond that, `Config` carries no chip parameters (the
+//! multi-core write strategy is its only other field, on multi-core
+//! chips).
 //!
 //! ## Usage
 //! With the `unstable` feature, implements
 //! [`embedded_storage::nor_flash::ReadNorFlash`], [`NorFlash`] and
-//! [`MultiwriteNorFlash`] (async equivalents on `FlashStorage<'_, Async>`).
+//! [`MultiwriteNorFlash`] (async equivalents on `Flash<'_, Async>`).
 //! The legacy `ReadStorage`/`Storage` traits are intentionally not
 //! implemented — use explicit `erase` then `write`.
 //!
@@ -77,27 +91,30 @@ Follows the current doc conventions: `procmacros::doc_replace` with `{before_sni
 //!
 //! ## Implementation State
 //! - Blocking API — first stabilization candidate
-//! - Async API (via [`into_async`]) — interrupt/DMA-driven on the external
-//!   SPI backend; chunked blocking ROM ops with inter-chunk yields on the
-//!   internal backend
-//! - Encrypted read/write (flash encryption) — internal backend only
-//! - Memory-mapped reads — via the inherent [`mmap`] method
-//! - External SPI flash — new capability, no esp-storage precedent
-//! - Dual/Quad SPI IO modes — not yet supported
+//! - Async API (via [`into_async`]) — chunked blocking ROM ops with
+//!   inter-chunk yields
+//! - Encrypted read/write (flash encryption)
 //!
 //! ## Limitations
+//! - Drives the internal boot flash only. External SPI NOR chips on the
+//!   general-purpose SPI masters are out of scope for this driver.
 //! - During each ROM chunk, interrupts are disabled on the executing core;
 //!   handlers that must run during flash operations (and everything they
 //!   touch) must live in RAM and must not access flash or PSRAM.
+//! - Flash operations must not be called from code whose stack lives in
+//!   PSRAM (e.g. a task stack allocated from a PSRAM heap): the ROM
+//!   routines execute on the caller's stack with the cache disabled. The
+//!   driver validates its own buffers; it cannot validate your stack.
+//! - No watchdog is fed while a ROM chunk runs; interrupts-off windows are
+//!   chunk-bounded (worst ≈ one block erase) except `erase_chip`. Matches
+//!   esp-storage behavior; a future API may run a user closure between
+//!   chunks (e.g. to feed a watchdog).
 //! - On multi-core chips, `write`/`erase` park the other core for the
-//!   duration of each chunk (default `MultiCoreStrategy`) — anything running
-//!   there (including esp-radio) stalls briefly. Unstable strategies opt out.
-//! - Custom `FlashChipConfig` commands needing address/dummy/data phases
-//!   (read, program, erase) are not executable on the internal flash of
-//!   ESP32/S2/P4 — those operations return [`Error::NotSupported`]. Use the
-//!   external backend for such chips.
-//! - An external flash chip owns its SPI bus; sharing the bus with other
-//!   devices is not supported (consequence of the backend-erased design).
+//!   duration of each chunk (default `MultiCoreStrategy`). Parking is an
+//!   unconditional hardware stall at an arbitrary instruction: whatever is
+//!   running there — a lock holder, an interrupt handler, esp-radio's
+//!   time-critical code — freezes in place, once per chunk. Unstable
+//!   strategies opt out.
 ```
 
 ---
@@ -117,41 +134,53 @@ pub struct Config {
     #[builder_lite(unstable)]
     multi_core_strategy: MultiCoreStrategy,
 
-    /// Override auto-detected chip parameters. `None` = auto-detect
-    /// from ROM/RDID. Applies to both `new` (internal) and `new_spi`
-    /// (external). Geometry/command/timing setters are unstable; the
-    /// `capacity` override is a stabilization candidate (see below).
-    chip: Option<FlashChipConfig>,
+    /// Unstable: capacity override in bytes. `None` (default) = auto-detect
+    /// from the flash chip itself. Set it when auto-detection fails
+    /// (`ConfigError::DetectionFailed`); when set it takes precedence over
+    /// detection.
+    #[builder_lite(unstable)]
+    capacity: Option<u32>,
 }
 ```
 
-On multi-core chips the default strategy is **`AutoPark`** (resolved 2026-07-16): stable `write`/`erase` park the other core for the duration of each chunked ROM call and unpark it between chunks. This is the documented stable contract — "write/erase briefly halt the other core" — because the alternatives don't hold up: `Error` as default would leave stable-only users unable to write flash at all (strategy selection is unstable), and a "blocking critical section" is illusory — a non-cooperating core executing XIP can only be kept off the flash by parking it. `MultiCoreStrategy` (`Error`, and the `unsafe` `Ignore`) stays an **unstable** opt-in. Migration note required: esp-storage's default is `Error`/`OtherCoreRunning`.
+`Config` is **deliberately minimal** ([A13](#a13--no-chip-configuration-at-launch)): both fields are unstable, so the *stable* Config surface starts empty, and on single-core chips the capacity override is its only field. It is `#[non_exhaustive]` precisely so parameters can be added as real needs appear. The capacity override ships unstable from day one: detection failure must be an *error*, never a sentinel, but the rare unknown-RDID chip still needs a recourse — whether the setter ever stabilizes is decided with usage data (stabilization table below). The derived `Default` is valid: `None` = auto-detect, and `MultiCoreStrategy`'s default is `AutoPark`. (BuilderLite generates `with_capacity(u32)` — auto-wrapped in `Some` — plus `with_capacity_none()`.)
 
-**Reads** are not multicore-guarded (matching esp-storage). Expected sound — SPI0/SPI1 arbitrate in hardware, so the other core's cache refills interleave with SPI1 read transactions — but the claim is verified by a dedicated dual-core HIL case (core 1 in an XIP hot loop, core 0 hammering `read`) and the outcome recorded in stable `read`'s documentation.
+On multi-core chips the default strategy is **`AutoPark`** ([A4](#a4--multi-core-stable-default-autopark)): stable `write`/`erase` park the other core for the duration of each chunked ROM call and unpark it between chunks. **What parking is** — and the stable docs must say this — is an unconditional hardware CPU stall at an arbitrary instruction: the frozen core may hold a spinlock, sit mid-interrupt-handler, or be mid-timing-critical work, and it freezes there once per chunk (mechanism: [C3](#c3--locking-and-multicore)). Two implementation rules follow:
+
+- **Lock-before-park**: the flash critical-section lock is acquired *before* parking the other core. esp-storage does the reverse, leaving a structural deadlock open if the frozen core held the lock ([C3](#c3--locking-and-multicore)); the FLASH singleton already makes that concretely unreachable, but the ordering closes it by construction and costs nothing.
+- **Cooperative parking** (the other core spins at a safe point, ESP-IDF IPC-style) is the eventual answer for esp-rtos/esp-radio workloads — a future unstable `MultiCoreStrategy` variant, additive, not designed now.
+
+`MultiCoreStrategy` (`Error`, and the `unsafe` `Ignore`) stays an **unstable** opt-in. Migration note required: esp-storage's default is `Error`/`OtherCoreRunning`.
+
+**Reads** are not multicore-guarded (matching esp-storage). Expected sound — SPI0/SPI1 arbitrate in hardware, so the other core's cache refills interleave with SPI1 read transactions — but the claim is verified by a dedicated dual-core HIL case (core 1 in an XIP hot loop, core 0 hammering `read`) and the outcome recorded in stable `read`'s documentation. ([A4](#a4--multi-core-stable-default-autopark))
 
 ### `ConfigError`
 
-Auto-detection is *not* infallible (unknown RDID ⇒ capacity 0 today), and a user-supplied `FlashChipConfig` can be nonsense — per the guidelines, an empty `ConfigError` is therefore wrong here:
+Auto-detection is *not* infallible (unknown RDID ⇒ capacity 0 today) — per the guidelines, an empty `ConfigError` is therefore wrong here:
 
 ```rust
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ConfigError {
-    /// Flash geometry could not be detected and no override was provided.
-    /// (Replaces esp-storage's silent capacity-0 behavior.)
+    /// The flash chip did not report a recognized JEDEC ID, so its
+    /// capacity could not be determined. Provide the capacity explicitly
+    /// via `Config::with_capacity`.
     DetectionFailed,
-    /// The provided `FlashChipConfig` is invalid (zero capacity or page
-    /// size, capacity not a multiple of the sector size, ...).
-    InvalidChipConfig,
+    /// The driver was constructed outside internal RAM — e.g. in a
+    /// PSRAM-backed allocation. Flash operations run with the cache
+    /// disabled, so the driver, which embeds its working buffer, must
+    /// live in internal RAM.
+    DriverPlacedInPsram,
 }
-// No capability variant: chip capability is per-operation, surfaced at the
-// point of use as `Error::NotSupported` (see per-operation
-// capability table). `apply_config` validates values, not capability.
 
 impl core::fmt::Display for ConfigError { ... }
 impl core::error::Error for ConfigError {}
 ```
+
+Variant docs are written for the API user; the design rationale stays out here in prose. `DetectionFailed` replaces esp-storage's silent capacity-0 (detection failure is a real error, never an in-band state; recourse: the unstable `with_capacity`, [A13](#a13--no-chip-configuration-at-launch)). `DriverPlacedInPsram` is the construction-time placement check that makes the embedded bounce buffer sound — the driver validates its *own* buffer's address, since the buffer is driver-owned, not caller-supplied (buffer residency, under the write path). There is no capability variant: capability is per-operation, surfaced at the point of use as `Error::NotSupported`.
+
+Deliberate deviation from the guidelines' "applying the default configuration must not fail": `Config::default()` (auto-detect) fails with `DetectionFailed` on a chip with an unknown RDID. The failure is environmental (unknown hardware), not combinatorial (invalid option mix) — the alternative is esp-storage's silent capacity-0, which this design explicitly rejects. The affected population is tiny — the ROM *booted* from the chip, so it is real, working flash that merely isn't in the RDID→capacity table — and the unstable `with_capacity` override is the recourse ([A13](#a13--no-chip-configuration-at-launch)). Detection failure is always a *real error*, never an in-band signal: capacity 0 does not exist as a driver state.
 
 ### `Error`
 
@@ -167,6 +196,9 @@ pub enum Error {
     Locked,
     NotAligned,
     OutOfBounds,
+    /// The requested operation is not available in the current
+    /// configuration (e.g. an encrypted write while flash encryption
+    /// is disabled).
     NotSupported,
     /// Unstable: only reachable via the unstable multi-core strategy.
     #[cfg(all(multi_core, feature = "unstable"))]
@@ -179,61 +211,16 @@ impl core::fmt::Display for Error { ... }
 impl core::error::Error for Error {}
 ```
 
-Resolved (2026-07-16): module-scoped `flash::Error` (esp-storage's `FlashStorageError` name is not carried over), `Unknown` instead of `Other` per esp-hal convention, no `i32` payload (an unexpected ROM return code is a bug to report, not data to branch on). SPI-backend failure variants (e.g. DMA errors) are added together with the `Spi` backend — `#[non_exhaustive]` makes that additive. A `NorFlashError`/`NorFlashErrorKind` mapping is required by the traits (`NotAligned`/`OutOfBounds` map directly, rest `Other`), as in `esp-storage/src/nor_flash.rs` today.
+Module-scoped `flash::Error`, `Unknown` instead of `Other`, no payload (rationale: [A6](#a6--error-type-shape)). A `NorFlashError`/`NorFlashErrorKind` mapping is required by the traits (`NotAligned`/`OutOfBounds` map directly, rest `Other`), as in esp-storage today. **`Unknown` must be loud**: the driver logs the raw ROM return code (and which ROM call produced it) via the crate's `defmt`/`log` machinery immediately before returning `Unknown` — the variant deliberately carries no payload, so that log line is the debugging path.
 
-### `FlashChipConfig`
-
-```rust
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, BuilderLite)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct FlashChipConfig {
-    capacity: u32,
-    #[builder_lite(unstable)]
-    sector_size: u32,
-    #[builder_lite(unstable)]
-    block_size: u32,
-    #[builder_lite(unstable)]
-    page_size: u32,
-
-    #[builder_lite(unstable)]
-    read_command: u8,
-    #[builder_lite(unstable)]
-    page_program_command: u8,
-    #[builder_lite(unstable)]
-    sector_erase_command: u8,
-    #[builder_lite(unstable)]
-    block_erase_command: u8,
-    #[builder_lite(unstable)]
-    chip_erase_command: u8,
-    #[builder_lite(unstable)]
-    write_enable_command: u8,
-    #[builder_lite(unstable)]
-    read_status_command: u8,
-    #[builder_lite(unstable)]
-    status_busy_mask: u8,
-
-    #[builder_lite(unstable)]
-    page_program_timeout_us: u32,
-    #[builder_lite(unstable)]
-    sector_erase_timeout_us: u32,
-    #[builder_lite(unstable)]
-    block_erase_timeout_us: u32,
-    #[builder_lite(unstable)]
-    chip_erase_timeout_us: u32,
-}
-```
-
-`Default` is **hand-written**, not derived (a derived default would be all-zero commands and zero geometry — guaranteed nonsense). Default = the standard 25-series command set (read 0x03, page-program 0x02, sector-erase 0x20, block-erase 0xD8, chip-erase 0xC7, write-enable 0x06, read-status 0x05, busy mask 0x01), 256 B page, 4 KiB sector, 64 KiB block, ESP-IDF-derived timeouts. `capacity` has no meaningful default; `apply_config` rejects invalid values with `ConfigError::InvalidChipConfig`.
-
-### `FlashChipInfo`
+### `ChipInfo`
 
 ```rust
 #[instability::unstable]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct FlashChipInfo {
+pub struct ChipInfo {
     pub chip_id: u32,
     pub capacity: u32,
     pub sector_size: u32,
@@ -242,107 +229,76 @@ pub struct FlashChipInfo {
 }
 ```
 
----
-
-## Custom chips (unstable) and backend selection
-
-For a chip whose command bytes, timing, or geometry differ from the auto-detected defaults, set a [`FlashChipConfig`] on the driver [`Config`] via `Config::with_chip(...)` (`None` = auto-detect). It applies to both `new` (internal) and `new_spi` (external) — no per-constructor variants; runtime changes go through the existing `apply_config`. `FlashChipConfig` *is* the data-driven driver. There is deliberately no chip-driver trait: it would carry only data and no behavior. `FlashCommand` is private in `host.rs`; all SPI execution stays internal.
-
-**Per-operation capability** (resolved 2026-07-16 — the API is designed around user operations, not around ROM's shape; each operation uses the best primitive the chip has, and only the operations the chip truly cannot execute fail):
-
-| Operation, as configured | Internal backend | `Spi` backend |
-|--------------------------|------------------|---------------|
-| default commands (incl. `capacity`-only override — the stabilization-candidate use case) | dedicated `esp_rom_spiflash_*` — all 10 chips | SPI master |
-| custom command, command+response shape (status reads, JEDEC ID) | `esp_rom_spiflash_read_user_cmd` — all 10 chips | SPI master |
-| custom command needing address/dummy/data phases (read, program, erase), or custom geometry | `spi_flash_hal_common_command` — S3/C2/C3/C5/C6/C61/H2; **`Error::NotSupported` on ESP32/S2/P4** | SPI master |
-
-Capability errors surface **per operation, at the point of use** — not at config time. `apply_config` validates *values* (`InvalidChipConfig`), never chip capability: a config is legitimate if the operations you actually use are executable. Example: a custom busy-poll/status command works on every chip, including ESP32 — rejecting the whole config because its (never-called) custom erase command can't run there would throw that away.
-
-**ROM command capability, verified against the ROM linker scripts and IDF sources (2026-07-16):**
-
-- `esp_rom_spiflash_*` (the dedicated per-operation functions, including `erase_chip`): **all 10 chips**, so the default and capacity-override paths work everywhere.
-- `esp_rom_spiflash_read_user_cmd(status: *mut u32, cmd: u8)`: **all 10 chips** (ESP32 native ROM `0x400621b0`; S2 alias of `SPI_user_command_read`; P4 `0x4fc0016c`; C-series/S3). Per the IDF header it sends an arbitrary 8-bit command and reads back the response — **no address phase, no dummy cycles, no write-data phase**. Sufficient for JEDEC ID and custom status reads; insufficient for custom erase (needs address) or program (needs address + data).
-- `spi_flash_hal_common_command` + its `esp_flash_default_chip` host context: **exactly S3/C2/C3/C5/C6/C61/H2** (verified against `esp-rom-sys/ld/`; absent on ESP32/S2/P4). Executes a full `spi_flash_trans_t` — 8/16-bit command, address + bit length, dummy cycles, mosi and miso data (verified against IDF `components/hal/spi_flash_hal_common.inc`). Its absence is the precise reason full `FlashChipConfig` overrides are `NotSupported` on ESP32/S2/P4.
-
-**Detection / `chip_info` story — no register code anywhere:** the JEDEC ID comes from `esp_rom_spiflash_read_user_cmd(0x9F)` on all chips except ESP32, which reads the ROM data global `g_rom_flashchip` (`device_id`, `chip_size`) because hardware RDID is unreliable there. This replaces even esp-storage's one remaining register touch (the SPI1 `flash_rdid` dedicated command bit); capacity decode keeps the esptool table.
-
-**Resolved (2026-07-16): no SPI1 register fallback for ESP32/S2.** The custom-chip user on those targets is driving an external data chip ("EEPROM" use case) on SPI2/3 — the `Spi` backend handles arbitrary commands there with no register code and no XIP hazard. Boot flash on ESP32/S2 is a standard chip covered by the ROM path. Per-op `NotSupported` → supported later is additive, so a register path can still be added if a genuine boot-flash-with-custom-commands user ever appears.
-
-Timeout overrides only apply on command-capable backends — the plain ROM functions own their timing. Auto-detection (JEDEC ID → known config) is internal: a private table, not a user-implementable hook. The override path already lets the user state their chip explicitly.
-
-Overriding `sector_size`/`block_size`/`page_size` does **not** change the `embedded-storage` `WRITE_SIZE`/`ERASE_SIZE` consts — those stay fixed at the ESP hardware values (4 / 4096). A chip with non-standard geometry must use the inherent `erase()`/`write()` and not rely on the const-based `NorFlash` trait.
-
-### Future: a behavioral trait
-
-A trait becomes justified only once a chip needs genuine *behavior* that `FlashChipConfig` can't encode as data — quad-enable procedures, 32-bit addressing for >16 MB parts, erase suspend/resume, custom protection/OTP sequences (cf. ESP-IDF's `spi_flash_chip_t` vtable). All future and unstable: introduce the trait then, with the signatures the real need reveals — not speculatively now.
+Geometry fields report the detected values (in practice the fixed ESP flash geometry: 256 B page, 4 KiB sector, 64 KiB block); there is no way to override them. `capacity` reflects the unstable override when set ([A13](#a13--no-chip-configuration-at-launch)).
 
 ---
 
-## `FlashStorage<'d, Dm>`
+## Detection and capability
 
-The driver carries the esp-hal [`DriverMode`] type-state. Constructors always build a `Blocking` driver; `into_async` / `into_blocking` flip between modes. Because esp-hal mode parameters carry **no default** (`I2c<'d, Dm: DriverMode>`, `Spi<'d, Dm: DriverMode>`), the `Dm` parameter must be committed on day one — adding it after stabilization is a breaking change to every `FlashStorage` annotation. The async *implementation* is promoted later (non-breaking). `Async` is `!Send` by construction (`Async(PhantomData<*const ()>)`, `lib.rs:556` — the `PhantomData<Dm>` field propagates it); `Blocking` is `Send`.
+**Detection / `chip_info` story — no register code anywhere:** the JEDEC ID comes from `esp_rom_spiflash_read_user_cmd(0x9F)` on all chips except ESP32, which reads the ROM data global `g_rom_flashchip` (`device_id`, `chip_size`) because hardware RDID is unreliable there. This replaces even esp-storage's one remaining register touch; capacity decode keeps the esptool table ([C5](#c5--capacity-detection)). `read_user_cmd` is a **private detection primitive** — it is not a user-facing custom-command surface ([A13](#a13--no-chip-configuration-at-launch); shape evidence in [B2](#b2--read_user_cmd-availability-and-shape)). An unknown JEDEC ID surfaces as `ConfigError::DetectionFailed` from `new()` unless the unstable `capacity` override is set — the override takes precedence over detection, and capacity 0 is never used as an in-band signal.
+
+**Capability**: every operation resolves to its dedicated `esp_rom_spiflash_*` function on all 10 chips ([B1](#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap)) — including `erase_chip` on S2, where esp-rom-sys adds the one legacy-family ld alias Espressif never bothered with (`esp_rom_spiflash_erase_chip = SPIEraseChip`; [A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol)). A one-off S2 hardware check confirms the ROM routine's completion-wait semantics — and if it turns out not to wait, the S2-aliased `esp_rom_spiflash_wait_idle` wraps it, exactly as ESP32's patched implementation does. There is no SPI1 register fallback ([A1](#a1--no-spi1-register-exec-fallback)) and no custom-command machinery (shelved with the chip-override work — [FLASH-DEFERRED.md](FLASH-DEFERRED.md)).
+
+A behavioral chip trait (quad-enable procedures, 32-bit addressing, erase suspend/resume) remains a future possibility, introduced only when a real chip needs it — sketch preserved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md).
+
+---
+
+## `Flash<'d, Dm>`
+
+The driver carries the esp-hal [`DriverMode`] type-state ([A14](#a14--drivermode-parameter-retained)). Constructors always build a `Blocking` driver; `into_async` / `into_blocking` flip between modes. Because esp-hal mode parameters carry **no default** (`I2c<'d, Dm: DriverMode>`, `Spi<'d, Dm: DriverMode>`), the `Dm` parameter must be committed on day one — adding it after stabilization is a breaking change to every `Flash` annotation. The async *implementation* is promoted later (non-breaking). `Async` is `!Send` by construction (`Async(PhantomData<*const ()>)`, `lib.rs:557` — the `PhantomData<Dm>` field propagates it); for this driver that restriction is artificial (nothing pins to a core — accepted cost, [A14](#a14--drivermode-parameter-retained)). `Blocking` is `Send` (upheld in the internals: the driver owns all its state by value, no raw ROM pointers).
 
 ```rust
 #[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct FlashStorage<'d, Dm: DriverMode> {
-    backend: FlashBackend,           // private, runtime-erased (internal vs SPI)
+pub struct Flash<'d, Dm: DriverMode> {
+    flash: FLASH<'d>,              // the consumed peripheral singleton
+    bounce: AlignedPageBuffer,     // 256 B driver-owned bounce buffer (residency rules below)
     capacity: u32,
     unlocked: bool,
-    _mode: PhantomData<Dm>,          // Dm = Async ⇒ driver is !Send (pinned to init core)
-    _lifetime: PhantomData<&'d ()>,
+    _mode: PhantomData<Dm>,        // Dm = Async ⇒ driver is !Send
 }
 ```
 
-No `PeripheralGuard` field: `system::Peripheral` has no `Flash` variant (FLASH is virtual with no clock gate — absent from every `clocks.toml`), and the internal backend needs no Drop work. The SPI backend stores the user's `Spi` driver, which brings its own guard and handles Drop per the guidelines.
+No `PeripheralGuard` field: `system::Peripheral` has no `Flash` variant (FLASH is virtual with no clock gate — absent from every `clocks.toml`), and the driver needs no Drop work.
 
 ```rust
 // Constructors always produce a Blocking driver (esp-hal convention).
-impl<'d> FlashStorage<'d, Blocking> {
+impl<'d> Flash<'d, Blocking> {
     pub fn new(
         flash: FLASH<'d>,
         config: Config,
-    ) -> Result<Self, ConfigError>;   // DetectionFailed surfaces here, not as capacity-0
+    ) -> Result<Self, ConfigError>;   // DetectionFailed surfaces here (not as capacity-0);
+                                      // DriverPlacedInPsram here too
 
+    /// Convert into an async driver: chunked blocking ROM ops that yield
+    /// between chunks. Type-state only — no interrupt handler is bound.
     #[instability::unstable]
-    pub fn new_spi(
-        spi: Spi<'d, Blocking>,
-        config: Config,
-    ) -> Result<Self, ConfigError>;
-    // The SPI driver arrives fully configured — pins including hardware CS,
-    // mode, frequency — and is consumed into the private backend. FlashStorage
-    // does not route pins or own bus setup. DMA/async plumbing for this
-    // backend is settled when the (unstable) backend lands.
-
-    /// Convert into an async driver. Interrupt/DMA-driven on the external SPI
-    /// backend; the internal backend runs chunked blocking ROM ops and yields
-    /// between chunks.
-    #[instability::unstable]
-    pub fn into_async(self) -> FlashStorage<'d, Async>;
+    pub fn into_async(self) -> Flash<'d, Async>;
 }
 
 #[instability::unstable]
-impl<'d> FlashStorage<'d, Async> {
-    pub fn into_blocking(self) -> FlashStorage<'d, Blocking>;
+impl<'d> Flash<'d, Async> {
+    pub fn into_blocking(self) -> Flash<'d, Blocking>;
     // async ops are exposed via the embedded_storage_async impls below
 }
 
 // Operations work in any mode — blocking calls remain available on an async
 // driver (see esp_hal `DriverMode` docs: cheaper for small transfers).
-impl<'d, Dm: DriverMode> FlashStorage<'d, Dm> {
+impl<'d, Dm: DriverMode> Flash<'d, Dm> {
     pub fn apply_config(&mut self, config: &Config) -> Result<(), ConfigError>;
 
     pub fn read(&mut self, offset: u32, buffer: &mut [u8]) -> Result<(), Error>;
     pub fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), Error>;
     pub fn erase(&mut self, from: u32, to: u32) -> Result<(), Error>;
 
-    /// Erases the entire chip. Capability-honest on both backends (the ROM
-    /// provides `esp_rom_spiflash_erase_chip` everywhere); no runtime nannying.
+    /// Erases the entire chip. Available on all 10 chips — on S2 via the
+    /// ROM's raw `SPIEraseChip` export (B1 correction, A15).
     ///
-    /// On the internal backend, understand what you are asking for:
+    /// Understand what you are asking for:
     /// - This is a single, un-chunkable ROM call: multi-second, interrupts
     ///   disabled on the executing core for the entire duration. The async
-    ///   version cannot yield — it is one giant blocking call in any mode.
+    ///   version cannot yield — it is one giant blocking call in any mode —
+    ///   and no watchdog can be fed while it runs.
     /// - Under the default `MultiCoreStrategy` the other core is parked for
     ///   the full duration: both cores are dead for seconds.
     /// - On return, the running program's own text is gone — the next cache
@@ -353,13 +309,18 @@ impl<'d, Dm: DriverMode> FlashStorage<'d, Dm> {
 
     pub fn capacity(&self) -> usize;
     #[instability::unstable]
-    pub fn chip_info(&self) -> FlashChipInfo;
+    pub fn chip_info(&self) -> ChipInfo;
 
-    // Flash-encryption aware access (internal backend only; `NotSupported`
-    // on the SPI backend). Ports esp-storage's encrypted.rs + mmu.rs.
+    // Flash-encryption aware access. `write_encrypted` errors when flash
+    // encryption is off — ported esp-storage semantics. Ports esp-storage's
+    // encrypted.rs + mmu.rs, including write_encrypted's whole-sector RMW:
+    // decrypted read → merge → erase sector → rewrite. NB overwrite
+    // semantics (it erases internally), and the ROM primitive is
+    // 32-byte-granular — the sector RMW is our wrapper contract; exposing
+    // the aligned 32-byte primitive later is additive. (C4)
     // Load-bearing for esp-bootloader-esp-idf: `FlashRegion::read/write`
     // dispatch on `is_effectively_encrypted()`, and `EncryptedNorFlashRegion`
-    // (WRITE_SIZE = 4096 — the ROM encrypts whole sectors) delegates here.
+    // (WRITE_SIZE = 4096 — the wrapper's RMW granularity) delegates here.
     #[instability::unstable]
     pub fn read_encrypted(&mut self, offset: u32, buffer: &mut [u8]) -> Result<(), Error>;
     #[instability::unstable]
@@ -367,36 +328,26 @@ impl<'d, Dm: DriverMode> FlashStorage<'d, Dm> {
 }
 ```
 
-**Write path**: sources residing in the flash address window are bounced through the RAM sector buffer (fixes the esp-storage footgun where a word-aligned `.rodata` source is read from flash while the cache is off). Unaligned sources are buffered as today.
+**Write and read paths — buffer residency**: the check is inverted from "is it in flash?" to **"is it in internal RAM?"**. Any `write` source outside internal RAM is bounced through a RAM buffer — that covers flash `.rodata` *and* PSRAM, which is equally cache-mapped and equally broken with the cache off (under `psram_allocator!` every `Vec` is PSRAM-backed, so this is the common case, not a corner). Any `read` destination outside internal RAM is bounced chunk-wise through the same buffer. Unaligned sources are buffered as today. The bounce buffer is a fixed 256 B (one page, word-aligned) and **driver-owned** — embedded in the driver at construction, never a stack local: esp-storage's 4 KiB stack locals ([C6](#c6--buffers-and-read_size)) are a hazard this driver does not inherit, and a stack local would itself sit in PSRAM whenever the caller's stack does. `new()` validates the embedded buffer's address is internal RAM and rejects a PSRAM-placed driver with `ConfigError::DriverPlacedInPsram` — the check that makes driver-supplied buffering sound. To be explicit about the contract ([A17](#a17--plain-slice-buffers-no-aligned-buffer-types)): **user buffers never error for placement or alignment** — anything unaligned or outside internal RAM is staged through the bounce transparently, at a copy cost; word-aligned internal-RAM buffers take the zero-copy fast path (a performance note for the docs, not an API requirement).
 
-### `mmap` (unstable)
+### No public `mmap`
 
-```rust
-impl<'d, Dm: DriverMode> FlashStorage<'d, Dm> {
-    /// Memory-map a region of the internal flash for zero-copy reads.
-    /// `NotSupported` on the SPI backend — per-op capability, like every
-    /// other operation.
-    #[instability::unstable]
-    pub fn mmap(&mut self, offset: u32, len: u32) -> Result<MappedFlash<'_>, Error>;
-}
-```
-
-Resolved (2026-07-16): this was an `InternalFlashExt` extension trait; dropped — single implementor, no compile-time backend separation after erasure, and per-op `NotSupported` is the design's uniform capability model. `MappedFlash` borrows `&mut self`, so no write/erase while mapped.
+The bootloader establishes the running app's flash mappings before esp-hal ever executes; the driver neither creates nor owns them, and offers no public mapping API ([A16](#a16--public-mmap-cut-mmu-machinery-stays-private)). The MMU page-mapping machinery lives on privately in `mmu.rs`, where `read_encrypted` needs it. The two candidate public shapes — a lookup over *existing* mappings and a true mapping-creation API (which would need an MMU-page ownership story esp-hal doesn't have) — are recorded in [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §5.
 
 ```rust
 // Blocking embedded-storage traits — available in any mode. All trait impls
 // are gated behind the `unstable` feature (see dependency policy below).
-// Geometry consts are FIXED at the ESP hardware values and do NOT reflect any
-// runtime chip-config geometry override.
-impl<Dm: DriverMode> ReadNorFlash for FlashStorage<'_, Dm> {
+impl<Dm: DriverMode> ReadNorFlash for Flash<'_, Dm> {
     const READ_SIZE: usize = 1; // bytewise — unaligned reads buffered, aligned reads fast-path
-                                // (replaces esp-storage's `bytewise-read` feature)
+                                // (replaces esp-storage's `bytewise-read` feature; NB default
+                                // esp-storage is READ_SIZE = 4 — see C6 — so 4 → 1 is a
+                                // loosening, but migration-note it)
 }
-impl<Dm: DriverMode> NorFlash for FlashStorage<'_, Dm> {
+impl<Dm: DriverMode> NorFlash for Flash<'_, Dm> {
     const WRITE_SIZE: usize = 4;    // word-aligned (ROM requirement)
     const ERASE_SIZE: usize = 4096; // sector — fixed across all ESP flash
 }
-impl<Dm: DriverMode> MultiwriteNorFlash for FlashStorage<'_, Dm> {}
+impl<Dm: DriverMode> MultiwriteNorFlash for Flash<'_, Dm> {}
 // MultiwriteNorFlash is only valid for non-encrypted access (doc note; the
 // encrypted path never gets a Multiwrite impl).
 
@@ -405,73 +356,32 @@ impl<Dm: DriverMode> MultiwriteNorFlash for FlashStorage<'_, Dm> {}
 // sub-sector updates own the read-modify-write.
 
 // Async embedded-storage traits — Async mode only.
-impl embedded_storage_async::nor_flash::ReadNorFlash for FlashStorage<'_, Async> { ... }
-impl embedded_storage_async::nor_flash::NorFlash for FlashStorage<'_, Async> { ... }
-impl embedded_storage_async::nor_flash::MultiwriteNorFlash for FlashStorage<'_, Async> {}
+impl embedded_storage_async::nor_flash::ReadNorFlash for Flash<'_, Async> { ... }
+impl embedded_storage_async::nor_flash::NorFlash for Flash<'_, Async> { ... }
+impl embedded_storage_async::nor_flash::MultiwriteNorFlash for Flash<'_, Async> {}
 ```
 
-**Dependency/feature policy** — no new cargo features. esp-hal's pattern for pre-1.0 ecosystem crates is version-suffixed optional deps enabled by `unstable` (`embedded-io-06`, `embedded-io-07`, `embedded-can`, ...; only 1.0 crates like embedded-hal are unconditional). So: deps land as `embedded-storage-03` / `embedded-storage-async-04` (renamed), pulled in by `unstable`; all trait impls are `#[instability::unstable]`. Whether the impls later stabilize on the 0.3 dep (deliberate policy exception) or wait for embedded-storage 1.0 is **deferred to the stabilization PR** (resolved 2026-07-16) — the suffix pattern keeps either answer additive, so nothing is gained by committing early. The inherent `read`/`write`/`erase`/`capacity` API is the stable surface; this mirrors UART (stable inherent API, unstable embedded-io impls).
-
+**Dependency/feature policy** — no new cargo features. esp-hal's pattern for pre-1.0 ecosystem crates is version-suffixed optional deps enabled by `unstable` (`embedded-io-06`, `embedded-io-07`, `embedded-can`, ...; only 1.0 crates like embedded-hal are unconditional). So: deps land as `embedded-storage-03` / `embedded-storage-async-04` (renamed), pulled in by `unstable`; all trait impls are `#[instability::unstable]`. Whether the impls later stabilize on the 0.3 dep (deliberate policy exception) or wait for embedded-storage 1.0 is **deferred to stabilization** ([A9](#a9--embedded-storage-trait-stabilization-deferred)) — the suffix pattern keeps either answer additive, so nothing is gained by committing early. The inherent `read`/`write`/`erase`/`capacity` API is the stable surface; this mirrors UART (stable inherent API, unstable embedded-io impls).
 
 ---
 
-## Private internals (`host.rs`)
+## Private internals (`rom.rs`, `mmu.rs`)
 
-The backend interface is **ops-shaped** — designed around driver operations, not around ROM entry points. Every method is total on every variant: each operation resolves to the best available primitive for the configured command, or `Err(NotSupported)`. There is no `exec`-style dispatch that is only valid on some variants, so no `unreachable!()` and no panic path.
+`rom.rs` owns the thin ROM wrappers (the `esp_rom_spiflash_*` set plus `read_user_cmd` for detection), the chunked read/write/erase loops with per-chunk critical sections, the lock-before-park ordering, and the bounce-buffer staging. `mmu.rs` is the esp-storage MMU port (encrypted reads, cache invalidation, P4 dual-map).
 
-```rust
-enum FlashBackend {
-    Internal(InternalState),  // per-op capability resolution — no config-time split
-    Spi(SpiState),            // SPI2/3 master driver — all commands supported
-}
+The totality principle from the original ops-shaped interface survives the backend enum's removal ([A3](#a3--ops-shaped-interface-principle-retained-backend-enum-dissolved)): every public operation is total and resolves to a dedicated ROM call on every chip ([A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol) closed the last capability gap); `Err(NotSupported)` remains only for environmental states (encrypted write with encryption off). No dispatch is partial, so no `unreachable!()` and no panic path.
 
-struct InternalState {
-    // esp_flash_default_chip->host, for spi_flash_hal_common_command.
-    // Exists only on S3/C2/C3/C5/C6/C61/H2; initialized by the 2nd-stage
-    // bootloader's flash init — validate before use.
-    #[cfg(any(esp32s3, esp32c2, esp32c3, esp32c5, esp32c6, esp32c61, esp32h2))]
-    rom_ctx: *mut core::ffi::c_void,
-}
+Async operations reuse the same internals: each chunked ROM call runs blocking (per page/sector/block, exactly the chunking esp-storage already does) and the future **yields between chunks**, bounding executor stall to one ROM call. Async futures are **chunk-granular cancel-safe** — dropping one mid-operation leaves the flash in a defined per-chunk state (every completed chunk is consistent; the remaining range is simply untouched/partially erased) — documented on the async impls when they land. `into_async` only changes the type-state: no interrupt handler is bound, no DMA is involved. Per the `DriverMode` contract, `Async` is `!Send`; `Blocking` is `Send`. This is orthogonal to `MultiCoreStrategy`, which governs the *other* core executing from flash during a write.
 
-struct SpiState { /* the user-configured Spi driver — brings its own PeripheralGuard */ }
+**Watchdogs / chunk boundaries**: no watchdog is fed inside a ROM chunk (interrupts are off; the ROM feeds nothing) — accepted as-is, matching esp-storage. If a real need appears, the additive answer is a future unstable `read_with`/`write_with`-style API that runs a user closure at each chunk boundary (kick a watchdog, update progress, ...) — noted, not designed now.
 
-impl FlashBackend {
-    fn read(&mut self, chip: &FlashChipConfig, offset: u32, buf: &mut [u8]) -> Result<(), Error>;
-    fn write_page(&mut self, chip: &FlashChipConfig, offset: u32, data: &[u8]) -> Result<(), Error>;
-    fn erase_sector(&mut self, chip: &FlashChipConfig, index: u32) -> Result<(), Error>;
-    fn erase_block(&mut self, chip: &FlashChipConfig, index: u32) -> Result<(), Error>;
-    fn erase_chip(&mut self, chip: &FlashChipConfig) -> Result<(), Error>;
-    fn read_status(&mut self, chip: &FlashChipConfig) -> Result<u8, Error>;
-    fn write_enable(&mut self, chip: &FlashChipConfig) -> Result<(), Error>;
-    fn read_id(&mut self) -> Result<u32, Error>;
-
-    fn is_internal(&self) -> bool {
-        matches!(self, FlashBackend::Internal(_))
-    }
-}
-```
-
-Per-operation resolution on `Internal`, in order:
-
-1. operation uses its default command → dedicated `esp_rom_spiflash_*` function (all 10 chips)
-2. custom command with a command+response shape (status reads, ID) → `esp_rom_spiflash_read_user_cmd` (all 10 chips)
-3. custom command needing address/dummy/data phases (read, program, erase), or custom geometry the dedicated ROM functions can't honor → `spi_flash_hal_common_command` (S3/C2/C3/C5/C6/C61/H2), else `Err(NotSupported)`
-
-On `Spi`, every operation lowers to a `FlashCommand` and executes as a half-duplex master transaction. `FlashCommand` stays private as the shared lowering used by `rom_hal_exec` and `spi_master_exec`; it is an implementation detail of steps 2–3, not the backend interface.
-
-`spi_master_exec` builds on the existing SPI master half-duplex API (`Command`/`Address` phases + DMA + hardware CS). Prior art: `qa-test/src/bin/qspi_flash.rs` already drives a GD25Q64C on SPI2 exactly this way with raw command bytes and fixed `delay_millis(250)` waits — the `Spi` backend is that pattern productized (RDSR busy-polling with the `FlashChipConfig` busy mask and timeouts instead of fixed delays). Note the test's chip filter `spi_master_supports_dma && !esp32p4`: the DMA-driven async path inherits the P4 SPI-DMA gap until that lands.
-
-Async operations reuse the same `FlashBackend`: the `Spi` backend starts a DMA transfer and awaits completion via interrupt; the internal backend runs each chunked ROM call blocking (per page/sector/block, exactly the chunking esp-storage already does) and **yields between chunks**, bounding executor stall to one ROM call. Switching to `Async` sets up the SPI interrupt handler only for the `Spi` backend; for the internal backend `into_async` only changes the type-state. Per the `DriverMode` contract, `Async` is `!Send` (handler pinned to the init core); `Blocking` is `Send`. This is orthogonal to `MultiCoreStrategy`, which governs the *other* core executing from flash during a write.
-
-There is deliberately **no SPI1 register-exec path** (resolved — see backend selection rules): internal operations that would need it return `Error::NotSupported` on ESP32/S2/P4, which keeps RAM-resident register bit-banging out of the design entirely.
-
-New ROM bindings land in `esp-rom-sys/src/rom/spiflash.rs`: `esp_rom_spiflash_read_user_cmd` (all chips) and `spi_flash_hal_common_command` + `esp_flash_default_chip` (7 chips) — chip coverage as verified in the capability inventory above.
+There is deliberately **no SPI1 register-exec path** ([A1](#a1--no-spi1-register-exec-fallback)): the driver calls only ROM functions bound in `esp-rom-sys`, and detection goes through `read_user_cmd` rather than registers (which bindings are new is a plan concern — see [FLASH-PLAN.md](FLASH-PLAN.md)).
 
 ---
 
 ## Host tests / emulation
 
-esp-bootloader-esp-idf's host tests (and `cargo xtask host-tests`) currently run against esp-storage's `emulation` feature — possible only because esp-hal is an *optional* dependency of esp-storage. esp-hal cannot build for the host, so the new driver cannot carry an emulation backend. The bootloader must decouple its tests from the concrete flash type (internal test mock behind `cfg(test)`, or a small internal abstraction over its `FlashRegion` accesses). This is a prerequisite for the migration, not an afterthought — without it, deprecating esp-storage breaks the bootloader's test suite.
+esp-hal cannot build for the host, so the new driver cannot carry an equivalent of esp-storage's `emulation` backend (which is what esp-bootloader-esp-idf's host tests run on today — possible only because esp-hal is an *optional* dependency of esp-storage). Consequence for consumers: the bootloader's host tests must decouple from the concrete flash type; how and when is [FLASH-PLAN.md](FLASH-PLAN.md)'s concern.
 
 ---
 
@@ -482,87 +392,165 @@ Everything lands unstable. This table is the *target* stable surface for the eve
 | Item | Stable target | Stays unstable |
 |------|---------------|----------------|
 | `Config`, `ConfigError` | yes | |
-| `FlashStorage<'d, Dm: DriverMode>` — the mode parameter¹ | yes | |
-| `FlashStorage::new()` → `FlashStorage<'d, Blocking>` | yes | |
-| `FlashStorage::apply_config()` | yes | |
-| `FlashStorage::read/write/erase/capacity` | yes | |
-| `Config::with_chip()` + `FlashChipConfig` capacity override² | yes | |
-| `FlashChipConfig` geometry / command / timing setters | | yes |
+| `Flash<'d, Dm: DriverMode>` — the mode parameter¹ | yes | |
+| `Flash::new()` → `Flash<'d, Blocking>` | yes | |
+| `Flash::apply_config()` | yes | |
+| `Flash::read/write/erase/capacity` | yes | |
 | `Error` | yes | |
-| `peripherals.FLASH` singleton (currently unstable) | yes (flip `stable = true` in 10 `soc.toml`s + `update-metadata`) | |
-| `FlashStorage::erase_chip()` | | yes |
-| `FlashStorage::chip_info()`, `FlashChipInfo` | | yes |
+| `peripherals.FLASH` singleton (currently unstable) | yes | |
+| `Flash::erase_chip()` | | yes |
+| `Flash::chip_info()`, `ChipInfo` | | yes |
+| `Config::with_capacity()` (capacity override) | | yes — promoted only if a stable user demonstrably needs it |
 | `read_encrypted` / `write_encrypted` | | yes |
-| `ReadNorFlash`/`NorFlash`/`MultiwriteNorFlash` impls | | yes — stabilization decision deferred to the stabilization PR |
-| `FlashStorage::new_spi()` | | yes |
+| `ReadNorFlash`/`NorFlash`/`MultiwriteNorFlash` impls | | yes — decision deferred to stabilization ([A9](#a9--embedded-storage-trait-stabilization-deferred)) |
 | `into_async()` / `into_blocking()` | | yes |
 | `embedded-storage-async` trait impls (`Async` mode) | | yes |
-| `mmap()`, `MappedFlash` | | yes |
 | `MultiCoreStrategy`, `OtherCoreRunning` (multi-core) | | yes |
 
-¹ The `Dm` type parameter must ship on day one: esp-hal mode parameters carry **no default**, so adding it later breaks every `FlashStorage` annotation. Only the async *implementation* is deferred — promoting it later is non-breaking.
+¹ The `Dm` type parameter must ship on day one: esp-hal mode parameters carry **no default**, so adding it later breaks every `Flash` annotation. Only the async *implementation* is deferred — promoting it later is non-breaking.
 
-² Paired deliberately: a stable capacity setter is useless if `with_chip` stays unstable (that was the only route to it). Capacity override is the answer to detection failure (`ConfigError::DetectionFailed`), which is a stable-path concern.
-
----
-
-## Files to create/modify
-
-| File | Action |
-|------|--------|
-| `esp-hal/src/flash/mod.rs` | **Create** — public types, re-exports |
-| `esp-hal/src/flash/storage.rs` | **Create** — `FlashStorage` |
-| `esp-hal/src/flash/host.rs` | **Create** — private ops-shaped backend |
-| `esp-hal/src/lib.rs` | Add flash module via `unstable_driver!` |
-| `esp-hal/Cargo.toml` | Add optional `embedded-storage-03` / `embedded-storage-async-04` deps to the `unstable` feature (no new features) |
-| `esp-metadata/devices/*/soc.toml` (×10) | Add `[device.flash]` driver entry (`flash_driver_supported` symbol, README matrix row); at stabilization: `stable = true` on FLASH |
-| `esp-metadata-generated/` | `cargo xtask update-metadata` |
-| `esp-rom-sys/src/rom/spiflash.rs` | Add `spi_flash_hal_common_command` / `esp_flash_default_chip` bindings (7 chips) + `esp_rom_spiflash_read_user_cmd` (all chips — JEDEC ID / `chip_info`) |
-| `esp-bootloader-esp-idf/` | Swap concrete flash type (decide: `FlashStorage<'d, Blocking>` vs generic `Dm`); own the RMW inside `FlashRegion::write` (byte-granular public API today, backed by esp-storage's `Storage` RMW); keep `NorFlashRegion`/`EncryptedNorFlashRegion` (#5857) working via the new encrypted API; decouple host tests from esp-storage emulation; drop or reimplement `ReadStorage`/`Storage` impls on `FlashRegion` (breaking — migration guide) |
-| `examples/peripheral/flash_read_write/` | Migrate to `esp_hal::flash` |
-| `examples/ota/update/` | Migrate (writes app image via `FlashRegion::write`) |
-| `hil-test/src/bin/storage.rs` | Migrate (covers encrypted path); keep HIL coverage |
-| `hil-test/src/bin/alloc_psram.rs` | Migrate `esp_storage::ll::spiflash_write` to `FlashStorage::write` (it only needs a flash write to happen while PSRAM is live) |
-| `qa-test/src/bin/multicore_flash.rs` | Migrate `multicore_auto_park`/`multicore_ignore` to `Config` strategy |
-| `qa-test/src/bin/qspi_flash.rs` | Migrate raw half-duplex commands + fixed delays to `FlashStorage::new_spi` (becomes the external-backend qa test) |
-| `hil-test/Cargo.toml`, `qa-test/Cargo.toml` | Feature wiring |
-| `esp-storage/` | Deprecation notice (first crate deprecation in the workspace — mechanism TBD: README + crates.io description + doc banner) |
-
-Changelog and migration-guide entries go in the **PR description** (structured sections), not `CHANGELOG.md` (per CONTRIBUTING.md).
+**Honest scope note**: the stable-only user is app code calling the inherent `read`/`write`/`erase`. The dominant consumers reach flash through the embedded-storage traits (sequential-storage, embassy-boot, littlefs adapters) or the encrypted API (esp-bootloader-esp-idf) — both unstable here, and the bootloader already forces `esp-hal/unstable` transitively today via esp-storage's chip features. Most of the practical de-unstabling value therefore sits in the trait-impl decision, which is why [A9](#a9--embedded-storage-trait-stabilization-deferred)'s deferral is a **required gate decision at stabilization**, not an open-ended one.
 
 ---
 
-## Verification
+## Appendix A — Decision log
 
-1. `cargo xtask lint-packages --packages esp-hal --chips esp32c6` (ROM-HAL path)
-2. `cargo xtask lint-packages --packages esp-hal --chips esp32s3` (Xtensa + multi-core)
-3. `cargo xtask lint-packages --packages esp-hal --chips esp32` (static ROM lib)
-4. `cargo xtask lint-packages --packages esp-hal --chips esp32p4` (no ROM HAL — `NotSupported` path)
-5. `cargo xtask fmt-packages`
-6. `cargo xtask run doc-tests <CHIP>` + `cargo xtask build documentation`
-7. Build flash examples and `esp-bootloader-esp-idf`
-8. `cargo xtask host-tests` — requires the bootloader emulation decoupling above
-9. HIL: migrated `storage` test (including encrypted read/write round-trip)
-10. HIL: `storage` test on ESP32 built at opt-level 0 — confirms dropping the esp-storage opt-level requirement (resolved question 2)
-11. HIL: OTA slot-switch round-trip — verifies the `otadata` update (explicit erase + write, guarding against sub-sector corruption/bricking after dropping the `Storage` RMW family)
-12. qa-test: `multicore_flash` on S3
-13. HIL: dual-core read soundness — core 1 in an XIP hot loop while core 0 hammers `read` (resolved question 4)
+Dated records of every design question raised in review and its resolution. Superseded entries keep their headings (anchor stability) with the superseding entry named; their extracted material lives in [FLASH-DEFERRED.md](FLASH-DEFERRED.md).
+
+### A1 — No SPI1 register-exec fallback
+
+(2026-07-16) The custom-chip user on ESP32/S2 drives an external data chip on SPI2/3 (prior art `qa-test/src/bin/qspi_flash.rs`); boot flash there is a standard chip on the ROM path. Internal operations that would need a register path were per-op `Error::NotSupported`. (2026-07-21) [A13](#a13--no-chip-configuration-at-launch) makes this trivially moot — there are no internal custom commands at all — but the decision stands on its own: no RAM-resident register bit-banging, ever; the driver calls only ROM functions.
+
+### A2 — ESP32 opt-level requirement dropped
+
+(2026-07-16) It was timing-related and predates #3688; the timing-sensitive code is precompiled in the ESP32 static ROM lib, and the remaining thin `#[ram]` ROM wrappers match the other chips, which never had the requirement. The new driver carries no build.rs check. Confirmation gate: run the new `flash.rs` HIL test on ESP32 in a debug build in PR A, before anything stabilizes.
+
+### A3 — Ops-shaped interface (principle retained; backend enum dissolved)
+
+(2026-07-16; scope-cut 2026-07-21 by [A12](#a12--internal-only-scope-the-external-backend-splits-out)/[A13](#a13--no-chip-configuration-at-launch)) Originally: the backend interface was designed around user operations rather than ROM entry points, dissolving an `exec` + `unreachable!()` shape. The backend enum left with the external driver and the multi-primitive resolution left with custom commands (full three-step table preserved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md)), but the principle stands: every operation is total — a dedicated ROM call or `Err(NotSupported)` — and no panic arm exists.
+
+### A4 — Multi-core stable default: AutoPark
+
+(2026-07-16) `Error` is unshippable as a stable default (strategy selection is unstable, so stable users would have no recourse), and a blocking cross-core critical section cannot exist for non-cooperating XIP code. Stable contract: write/erase briefly halt the other core, documented. `Error`/`Ignore` stay unstable opt-ins; migration note vs esp-storage's `Error` default. Reads stay unguarded, backed by a dual-core HIL verdict recorded in stable `read` docs.
+
+### A5 — mmap is an inherent method
+
+(2026-07-16) This was an `InternalFlashExt` extension trait; dropped — single implementor, and per-op `NotSupported` was the design's uniform capability model. `MappedFlash` stays. (2026-07-21) With [A12](#a12--internal-only-scope-the-external-backend-splits-out), `mmap` no longer has any `NotSupported` path at all — the structural carve-out was the split's smoking gun. Later the same day, [A16](#a16--public-mmap-cut-mmu-machinery-stays-private) removed public `mmap` entirely; the inherent-method conclusion carries over to any future revival.
+
+### A6 — Error type shape
+
+(2026-07-16) `flash::Error` (module-scoped, per convention; esp-storage's `FlashError` name is not carried over), `Unknown` not `Other` per esp-hal convention, no `i32` payload (an unexpected ROM return code is a bug to report, not data to branch on), `#[non_exhaustive]`. (2026-07-21) The "SPI-backend variants added later" note is superseded by [A12](#a12--internal-only-scope-the-external-backend-splits-out): the external driver owns its own error design.
+
+### A7 — erase_chip allowed, unstable, loud docs
+
+(2026-07-16) `NotSupported` would violate the per-op capability law (the chip can execute it), and `unsafe` would be incoherent (safe `erase` can already wipe the running app). Doc block states: single un-chunkable multi-second ROM call with interrupts off; other core parked the whole time under `AutoPark`; the caller's own text is erased on return — only coherent from IRAM-resident code. Correction (2026-07-20): ESP32-S2's ROM lacks the aliased function entirely — on S2, `NotSupported` *is* the per-op-honest answer; binding raw `SPIEraseChip` is additive ([B1](#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap)). Re-corrected (2026-07-21, [A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol)): esp-rom-sys supplies the missing alias itself — `erase_chip` is available on all 10 chips and no `NotSupported` case remains for it.
+
+### A8 — new_spi takes a pre-configured Spi driver (superseded)
+
+(2026-07-16; superseded 2026-07-21 by [A12](#a12--internal-only-scope-the-external-backend-splits-out)) The external backend left the driver. The decision text and its open questions move to [FLASH-DEFERRED.md](FLASH-DEFERRED.md) — where the split *un-freezes* the bus-ownership question the erasure had closed (a standalone external driver can take an embedded-hal `SpiDevice` and share the bus).
+
+### A9 — embedded-storage trait stabilization deferred
+
+(2026-07-16) Impls stay `#[instability::unstable]`; the 1.0-policy-vs-exception call belongs to the stabilization PR, with usage data in hand. The version-suffix dep pattern (`embedded-storage-03`) keeps either outcome additive.
+
+### A10 — ll module stays private
+
+(2026-07-16) No public `esp_hal::flash::ll`: it would bypass bounds checks, unlock state, and `MultiCoreStrategy` under esp-hal's name, and the only public-`ll` precedent (`clock::ll`) exists because there is no full driver there. `esp-rom-sys` is the designated raw escape hatch; `alloc_psram.rs` migrates to `Flash::write`. Thin ROM wrappers live on as a private module; making them public later is additive if a real user appears.
+
+### A11 — Driver-built host context (superseded, evidence preserved)
+
+(2026-07-20; superseded 2026-07-21 by [A13](#a13--no-chip-configuration-at-launch)) With chip configuration cut, `spi_flash_hal_common_command` has no consumer. The settled investigation — the ROM's `esp_flash_default_chip` is never initialized under esp-hal's boot flow; a driver using `common_command` must build its own host context — is preserved in full in [FLASH-DEFERRED.md](FLASH-DEFERRED.md), together with its residual hardware validation spike.
+
+### A12 — Internal-only scope: the external backend splits out
+
+(2026-07-21) The runtime-erased backend enum conflated two kinds of `NotSupported`: *contingent* chip gaps (S2 `erase_chip` — a meaningful operation, liftable additively) and *structural* impossibilities (`mmap` needs the cache/MMU path, encrypted access the XTS-AES engine — both exist only on SPI0/SPI1; no external chip can ever have them, and which backend exists is known at the constructor — a compile-time fact the erasure discarded, then partially recovered at runtime). The backends also shared almost nothing beyond the operation list: multi-core parking, residency bounce, cache-off critical sections and the entire Limitations block are internal-only; DMA error variants and genuinely interrupt-driven async are external-only — the shared `Config`/`Error` smeared both directions. The erasure additionally forced exclusive SPI-bus ownership (a generic `SpiDevice` parameter cannot exist on an erased type). Resolution: `Flash` is internal-only and keeps its name (it is *the* system flash); the external driver becomes its own future type, unified with this one through the embedded-storage traits — the ecosystem's own mechanism for "generic over storage" — not through a shared concrete type. All deferred material moves to [FLASH-DEFERRED.md](FLASH-DEFERRED.md) (external design, `ChipConfig` vocabulary, custom-command evidence).
+
+### A13 — No chip configuration at launch
+
+(2026-07-21) A boot flash the ROM booted is, by construction, drivable with the ROM's default command set — the "custom chip" user was always the external-chip user, on every target (generalizing [A1](#a1--no-spi1-register-exec-fallback)'s logic from ESP32/S2 to all 10 chips). `Config` therefore ships `#[non_exhaustive]` and empty apart from `multi_core_strategy` (multi-core chips only), growing parameters only as real needs appear. Cut with it: `ChipConfig` (whole type → [FLASH-DEFERRED.md](FLASH-DEFERRED.md)), `ConfigError::InvalidChipConfig`, resolution steps 2–3, the `common_command` binding, and the A11 hardware spike. Refinement (same day, on review): detection failure must be a *real error* from `new` — esp-storage's capacity-0 in-band signal is explicitly rejected — and the recourse ships day one as an **unstable** `with_capacity` override rather than waiting for a user to get stuck. Whether that setter ever stabilizes is a stabilization-time call with usage data; the stable Config surface still starts empty.
+
+### A14 — DriverMode parameter retained
+
+(2026-07-21) Grilled because its strongest original justification — interrupt/DMA-driven async on the external backend — left with [A12](#a12--internal-only-scope-the-external-backend-splits-out). Retained anyway: crate-wide convention (every async-capable esp-hal driver carries `Dm`), day-one necessity (mode parameters have no default, so a retrofit breaks every annotation), and a real async need remains (inter-chunk yields keep an embassy executor live during flash writes — embassy-boot / async OTA). Accepted cost: the shared `Async` type-state is `!Send` by construction — artificial for this driver, since nothing binds a handler or pins to a core.
+
+### A15 — S2 erase_chip: bind the raw ROM symbol
+
+(2026-07-21) Challenged in review — "IDF gets all chips to work, so we can too" — with pre-compiling the function (as done for ESP32) as the suspected mechanism. The investigation ([B1](#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap) correction) found the reality simpler than the patch hypothesis: the S2 ROM routine exists (`SPIEraseChip = 0x400170ec`); Espressif's legacy-alias ld file omits only chip-erase because no IDF code anywhere calls the legacy erase-chip API (IDF's own chip erase runs through the app-compiled flash HAL); and the compiled ROM patch defines erase_chip for ESP32 only — there is nothing to precompile for S2. Resolution: esp-rom-sys adds `esp_rom_spiflash_erase_chip = SPIEraseChip` for S2, making `erase_chip` available on all 10 chips. A one-off S2 hardware check (manual — chip erase is destructive, not a CI HIL case) confirms completion-wait semantics, with the S2-aliased `esp_rom_spiflash_wait_idle` as the wrap-around fallback (mirroring ESP32's patched implementation: wait-idle → CE → wait-idle). This closes the last per-op capability gap: `Error::NotSupported` retains only environmental cases (encrypted write with encryption off).
+
+### A16 — Public mmap cut; MMU machinery stays private
+
+(2026-07-21) Raised in review: the flash mappings for the running app are established by the bootloader before esp-hal ever runs — the driver neither creates nor owns them — so a public `mmap` *operation* misrepresents the driver's authority. The refinement: the app image's segments are indeed pre-mapped, but arbitrary regions (e.g. an asset partition) are *not* — a true mapping-creation API is what IDF's `spi_flash_mmap`/`esp_partition_mmap` provide, and it requires an MMU-page ownership story (free-slot allocation, coexistence with PSRAM init and the transient encrypted-read mappings) that esp-hal does not have and that this driver should not hand-wave in as a rider on the encrypted port. Resolution: public `mmap()`/`MappedFlash` leave the surface; the MMU machinery (`mmu.rs`) stays as private internals for `read_encrypted`. Both public shapes are recorded in [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §5 for when a real consumer appears: a *lookup* over existing mappings (IDF `spi_flash_phys2cache` analogue — cheap, borrows the driver like `MappedFlash` did) and the full mapping-creation API (needs the MMU allocator design).
+
+### A17 — Plain-slice buffers; no aligned-buffer types
+
+(2026-07-21) Raised in review: should `read`/`write` demand buffer placement/alignment (documented contract, or an aligned-slice type in the signatures) instead of erroring? Neither, and the design already does neither: user buffers *never* error for placement or alignment — the driver-embedded bounce buffer stages any source/destination that is unaligned or outside internal RAM, transparently, at a copy cost. `DriverPlacedInPsram` concerns only the placement of the *driver itself*, which embeds that bounce buffer: a scratch buffer in PSRAM cannot stage anything, and no copy can fix it, hence the constructor check. Aligned-buffer *types* were considered and rejected: the embedded-storage traits fix the signatures at plain `&[u8]`/`&mut [u8]`, so the dominant consumers (sequential-storage, embassy-boot, littlefs adapters) could never supply a special type — and alignment here is a fast-path optimization, not a hard requirement (unlike DMA, where esp-hal's dedicated buffer types exist because copying would defeat DMA's purpose). The docs state the fast path — word-aligned internal-RAM buffers avoid the copy — as a performance note.
+
+No open questions — A1–A17 resolved; superseded entries (A8, A11, parts of A3/A5/A6/A7) are marked above and their material preserved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md). One open hardware task: the S2 `SPIEraseChip` semantics check ([A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol)), tracked in [FLASH-PLAN.md](FLASH-PLAN.md).
 
 ---
 
-## Resolved questions
+## Appendix B — ROM capability evidence
 
-1. **ESP32/S2 register-exec path — removed** (2026-07-16). The custom-chip user on ESP32/S2 drives an external data chip on SPI2/3 (the `Spi` backend — prior art `qa-test/src/bin/qspi_flash.rs`); boot flash there is a standard chip on the ROM path. Internal operations that would need it return per-op `Error::NotSupported` on ESP32/S2/P4 — additive to lift later if a real boot-flash user appears.
-2. **ESP32 opt-level ≥ 2 requirement — dropped** (2026-07-16). It was timing-related and predates #3688; the timing-sensitive code is precompiled in the ESP32 static ROM lib, and the remaining thin `#[ram]` ROM wrappers match the other chips, which never had the requirement. The new driver carries no build.rs check. Confirmation gate: run the migrated `storage` HIL test on ESP32 in a debug build before landing.
-3. **`exec` + `unreachable!()` — dissolved** (2026-07-16). The backend interface is ops-shaped, designed around user operations rather than ROM entry points: each operation resolves per chip to a dedicated ROM function, `esp_rom_spiflash_read_user_cmd` (command+response, all chips), `spi_flash_hal_common_command` (full transactions, 7 chips), or the SPI master — and returns `Error::NotSupported` only for what the chip truly cannot execute. No dispatch method is partial over the backend enum, so no panic arm exists. `FlashCommand` remains as private lowering shared by the two command-capable paths.
-4. **Multi-core stable default — `AutoPark`** (2026-07-16). `Error` is unshippable as a stable default (strategy selection is unstable, so stable users would have no recourse), and a blocking cross-core critical section cannot exist for non-cooperating XIP code. Stable contract: write/erase briefly halt the other core, documented. `Error`/`Ignore` stay unstable opt-ins; migration note vs esp-storage's `Error` default. Reads stay unguarded, backed by a dual-core HIL verdict recorded in stable `read` docs.
-5. **`InternalFlashExt` — dropped** (2026-07-16). `mmap` is an inherent unstable method returning `NotSupported` on the SPI backend, consistent with the per-op capability model. `MappedFlash` stays.
-6. **Error type shape** (2026-07-16). `flash::Error` (module-scoped, per convention), `Unknown` not `Other`, no payload, `#[non_exhaustive]`; SPI-backend error variants added when the `Spi` backend lands.
-7. **`erase_chip` on the internal backend — allowed, unstable, loud docs** (2026-07-16). `NotSupported` would violate the per-op capability law (the chip can execute it), and `unsafe` would be incoherent (safe `erase` can already wipe the running app). Doc block states: single un-chunkable multi-second ROM call with interrupts off; other core parked the whole time under `AutoPark`; the caller's own text is erased on return — only coherent from IRAM-resident code.
-8. **`new_spi` shape — takes a pre-configured `Spi<'d, Blocking>`** (2026-07-16). The user owns bus setup (pins including hardware CS, mode, frequency) before passing the driver in; `FlashStorage` consumes it into the private backend, so no new public type parameters — erasure intact. DMA/async plumbing for this backend is an implementation detail settled when the unstable backend lands.
-9. **embedded-storage trait stabilization — deferred** (2026-07-16). Impls stay `#[instability::unstable]`; the 1.0-policy-vs-exception call belongs to the stabilization PR, with usage data in hand. The version-suffix dep pattern (`embedded-storage-03`) keeps either outcome additive.
-10. **`ll` module — private** (2026-07-16). No public `esp_hal::flash::ll`: it would bypass bounds checks, unlock state, and `MultiCoreStrategy` under esp-hal's name, and the only public-`ll` precedent (`clock::ll`) exists because there is no full driver there. `esp-rom-sys` is the designated raw escape hatch; `alloc_psram.rs` migrates to `FlashStorage::write`. Thin ROM wrappers live on as a private module; making them public later is additive if a real user appears.
+Per-chip ROM symbol facts, verified against `esp-rom-sys/ld/`, IDF's `components/esp_rom/*/ld/`, and the IDF sources (2026-07-16; corrections 2026-07-20 and 2026-07-21). The `common_command` evidence (former B3) moved to [FLASH-DEFERRED.md](FLASH-DEFERRED.md) with the custom-command work.
 
-## Open questions
+### B1 — Dedicated ROM functions and the S2 erase_chip gap
 
-None — all questions raised in review are resolved above (2026-07-16).
+Present on **all 10 chips** for read/write/erase-sector/erase-block/unlock/write-encrypted — the default command set works everywhere. Exception: **`esp_rom_spiflash_erase_chip` is 9/10 — absent on ESP32-S2**, whose ROM exports only the raw, un-aliased `SPIEraseChip = 0x400170ec` (`esp32s2.rom.ld:612`) and has no patch lib (`esp-rom-sys/libs/esp32s2/` is a placeholder). (Superseded — see the 2026-07-21 correction below: the missing piece is the *alias*, not the routine.) ESP32's incomplete ROM is patched by `esp-rom-sys/libs/esp32/libesp_rom.a` (pinned to IDF v5.3.1, #3688), which *does* define `esp_rom_spiflash_erase_chip`.
+
+**Correction (2026-07-21, [A15](#a15--s2-erase_chip-bind-the-raw-rom-symbol)) — the "gap" is an alias omission, not a missing routine.** Verified against IDF release/v5.2 (`72d06017df`): (1) S2's `esp32s2.rom.spiflash_legacy.ld` aliases the *entire* legacy family to the original ROM names (`SPIRead`, `SPIWrite`, `SPIEraseSector`, `SPIEraseBlock`, `SPIEraseArea`, `SPI_Wait_Idle`, ...) and omits only chip-erase; the routine itself is exported as `SPIEraseChip = 0x400170ec` (`esp32s2.rom.ld:612`). (2) Espressif never added the alias because *nothing in IDF calls* `esp_rom_spiflash_erase_chip` — zero call sites outside `components/esp_rom` itself; modern IDF erases through the app-compiled flash HAL, and S2's `rom/spi_flash.h` doesn't even declare the legacy name. (3) The compiled ROM patch (`components/esp_rom/patches/esp_rom_spiflash.c` — the source ESP32's `libesp_rom.a` is built from) defines `esp_rom_spiflash_erase_chip` **for ESP32 only**; its entire S2 section is a single function (`esp_rom_spiflash_write_disable`), so there is nothing to precompile for S2. Resolution: esp-rom-sys adds the missing alias itself (`esp_rom_spiflash_erase_chip = SPIEraseChip`); the ESP32 patched implementation (wait-idle → CE → wait-idle) is the semantics reference for the one-off S2 hardware check. Re-verify against IDF master at implementation time in case a later IDF adds the alias upstream.
+
+### B2 — read_user_cmd availability and shape
+
+`esp_rom_spiflash_read_user_cmd(status: *mut u32, cmd: u8)` exists on **all 10 chips**: ESP32 native ROM `0x400621b0` (`esp32.rom.ld:1371`); S2 as an ld alias of `SPI_user_command_read` (= `0x40015fc8`, `esp32s2.rom.spiflash_legacy.ld:18`); P4 `0x4fc0016c`; all C-series and S3 in their respective ROM ld files. Per the IDF header it sends an arbitrary 8-bit command and reads back the response — **no address phase, no dummy cycles, no write-data phase**. Sufficient for JEDEC ID (RDID 0x9F) — which is all this design uses it for, as a private detection primitive ([A13](#a13--no-chip-configuration-at-launch)). The user-facing custom-command surface it once backed is shelved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md).
+
+### B3 — common_command and the host context
+
+Moved to [FLASH-DEFERRED.md](FLASH-DEFERRED.md) ([A13](#a13--no-chip-configuration-at-launch): no consumer in this design). Heading retained for anchor stability.
+
+---
+
+## Appendix C — esp-storage internals evidence
+
+File-level evidence for the Baseline section, gathered 2026-07-20 against the current tree.
+
+### C1 — ROM call sites
+
+The actual ROM FFI calls live in `esp-storage/src/hardware.rs:8-41` (via `esp_rom_sys::rom::spiflash`); `ll.rs` is only the thin public unsafe wrapper. ESP32 links `esp-rom-sys/libs/esp32/libesp_rom.a` (compiled from IDF v5.3.1 `esp_rom_spiflash.c`, #3688); every other chip resolves ROM symbols via `esp-rom-sys/ld/<chip>/`. The only SPI1 register access in the crate is RDID at `hardware.rs:70-73`.
+
+### C2 — Chunking and critical sections
+
+Each ROM call is individually wrapped in `maybe_with_critical_section` (`hardware.rs:8-30`); erase chunks per sector/block (`nor_flash.rs:161-187`), write per sector/page (`nor_flash.rs:124-156`, `storage.rs:48-73`); the lock is released between chunks, so interrupts re-enable there. Cache disable/restore happens inside the ROM routines themselves.
+
+### C3 — Locking and multicore
+
+The critical section takes a dedicated `esp_sync::RawMutex` (`lib.rs:48-58`) — on multi-core chips a cross-core spinlock plus executing-core interrupt disable; it cannot stop the other core's XIP. `MultiCoreStrategy` (`common.rs:229-242`): `Error` (default, set in `new()`, `common.rs:97`), safe `AutoPark` (`common.rs:248`), `unsafe Ignore` (`common.rs:258`); pre/post hooks guard write/erase only — reads have no guard. AutoPark's mechanism is `CpuControl::park_core` — a hardware CPU stall via RTC `sw_cpu_stall`/`options0` (`esp-hal/src/soc/esp32/cpu_control.rs:16-36`) — freezing the other core wherever it is, with no safe-point wait. esp-storage parks *before* taking the flash lock (`common.rs:282-289`), the ordering the new driver inverts (lock-before-park).
+
+### C4 — Encrypted access and MMU
+
+The ROM primitive `esp_rom_spiflash_write_encrypted` requires 32-byte alignment of destination address *and* length (`ll.rs:78-80`, `esp-rom-sys/src/rom/spiflash.rs:36-38`). esp-storage's `write_encrypted` (`encrypted.rs:44-79`) wraps it in a whole-4096-byte-sector RMW: MMU-decrypted read → merge → **erase sector** → rewrite — hence the overwrite semantics and the `EncryptedNorFlashRegion` `WRITE_SIZE = SECTOR_SIZE` (4096, `esp-bootloader-esp-idf/src/partitions.rs:873`). It returns `NotSupported` when `flash_encryption()` is off (`encrypted.rs:51-54`). `read_encrypted` maps temporary flash MMU pages for decrypted reads (`mmu.rs:66-134`); P4 invalidates both L1 D-cache and L2 (`mmu.rs:168-179`, the "dual-map" variant). HIL coverage (`hil-test/src/bin/storage.rs:43-88`) runs on encryption-disabled boards and asserts encrypted == plaintext — no CI device has encryption eFuses burned, so a true encrypted round-trip is never exercised.
+
+### C5 — Capacity detection
+
+ESP32 reads `g_rom_flashchip.chip_size` (`hardware.rs:54-65`; symbol at `esp-rom-sys/ld/esp32/rom/esp32.rom.ld:93`); all other chips RDID via SPI1 registers and decode with the esptool-derived ID→capacity table (`hardware.rs:67-121`, source URL in a comment at `:79`). An unknown ID falls through to `_ => 0` (`hardware.rs:90,118`), after which `check_bounds` fails every op with `OutOfBounds` (`common.rs:116-122`).
+
+### C6 — Buffers and READ_SIZE
+
+Word-aligned buffers are passed straight to the ROM with no residency check (`common.rs:173-192`, `nor_flash.rs:129-137`). Unaligned/RMW paths use stack locals: `FlashWordBuffer` (4 B) and `FlashSectorBuffer` (4096 B, `buffer.rs:12-14`; used on the stack in `storage.rs:55` and the read paths). The `bytewise-read` feature is **default-off** (`Cargo.toml:59-65`), so default esp-storage has `READ_SIZE = 4` (`nor_flash.rs:10-16`); `MultiwriteNorFlash` is implemented (`nor_flash.rs:242`).
+
+### C7 — External-backend prior art
+
+Moved to [FLASH-DEFERRED.md](FLASH-DEFERRED.md) with the external driver ([A12](#a12--internal-only-scope-the-external-backend-splits-out)). Heading retained for anchor stability.
+
+---
+
+## Glossary
+
+- **XIP** — execute-in-place: code runs directly from cache-mapped flash. Why flash ops must disable the cache and why the other core is a hazard during writes.
+- **SPI0/SPI1** — the internal memory-SPI pair: SPI0 serves the cache (XIP), SPI1 carries out flash transactions (what the ROM routines drive). The general-purpose SPI2/SPI3 masters are unrelated to this driver.
+- **RDID / JEDEC ID** — the 0x9F read-identification command; its 3-byte response identifies vendor/type/capacity.
+- **`g_rom_flashchip`** — the *legacy* ROM data global describing the boot flash, populated by ROM boot from the image header. The `g_rom_` prefix marks ROM-populated data.
+- **Parking / AutoPark** — halting the other core via hardware stall (RTC `sw_cpu_stall`) for the duration of a flash chunk, so its XIP cannot touch the flash mid-operation.
+- **Bounce buffer** — the driver-owned 256 B internal-RAM buffer that stages data whenever a user buffer lives outside internal RAM (flash `.rodata` or PSRAM).
+- **RMW** — read-modify-write: reading a whole sector, merging changes, erasing, rewriting. The encrypted write wrapper does this internally; the plain NOR API deliberately does not.
+- **Chunk** — one bounded ROM call (a page program, sector/block erase, or bounded read); the unit between which interrupts re-enable, the other core unparks, and async yields.
+- **P4 dual-map** — ESP32-P4 cache invalidation must cover both L1 D-cache and L2 for MMU-remapped flash reads.
