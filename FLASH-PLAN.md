@@ -1,15 +1,15 @@
 # `esp_hal::flash` — Implementation Plan (fast path to the stable surface)
 
-Companion to [FLASH-DESIGN.md](FLASH-DESIGN.md), which is the authoritative whole-picture design (decision log in its [Appendix A](FLASH-DESIGN.md#appendix-a--decision-log); evidence in [Appendix B](FLASH-DESIGN.md#appendix-b--rom-capability-evidence) and [Appendix C](FLASH-DESIGN.md#appendix-c--esp-storage-internals-evidence)). Deferred/extracted material — the external SPI driver, chip configuration, custom-command evidence — is shelved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md) and is on **no** path here. This document owns everything actionable: the PR breakdown, file inventory, verification checklist, and stabilization gates. Goal: land the blocking core, prove it through the real consumers, and stabilize — without waiting on the async work.
+Companion to [FLASH-DESIGN.md](FLASH-DESIGN.md), which is the authoritative whole-picture design (decision log in its [Appendix A](FLASH-DESIGN.md#appendix-a-decision-log); evidence in [Appendix B](FLASH-DESIGN.md#appendix-b-rom-capability-evidence) and [Appendix C](FLASH-DESIGN.md#appendix-c-esp-storage-internals-evidence)). Deferred/extracted material — the external SPI driver, chip configuration, custom-command evidence — is shelved in [FLASH-DEFERRED.md](FLASH-DEFERRED.md) and is on **no** path here. This document owns everything actionable: the PR breakdown, file inventory, verification checklist, and stabilization gates. Goal: land the blocking core, prove it through the real consumers, and stabilize — without waiting on the async work.
 
 ## Ship list — the stable surface being targeted
 
 | Item | Notes |
 |------|-------|
 | `Flash<'d, Dm: DriverMode>` | `Dm` ships in the initial version; only `Blocking` is usable on the fast path |
-| `Flash::new(FLASH, Config)` | `DetectionFailed` instead of silent capacity-0; unstable `with_capacity` escape hatch (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)) |
-| `read` / `write` / `erase` / `capacity` / `apply_config` | chunked ROM ops, AutoPark multi-core default (lock-before-park), internal-RAM residency bounce (write sources *and* read destinations — flash and PSRAM are both cache-mapped); driver-owned bounce buffer, placement-validated at construction (`ConfigError::DriverPlacedInPsram`) |
-| `Config`, `ConfigError`, `flash::Error` | `Config` is near-empty (multi-core strategy + unstable capacity override) and `#[non_exhaustive]` — grows only as real needs appear (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)) |
+| `Flash::new(FLASH, Config)` | `DetectionFailed` instead of silent capacity-0; unstable `with_capacity` escape hatch (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)) |
+| `read` / `write` / `erase` / `capacity` / `apply_config` | chunked ROM ops, AutoPark multi-core default (lock-before-park), internal-RAM residency bounce (write sources *and* read destinations — flash and PSRAM are both cache-mapped); driver placement enforcement, direct-read chunking, and `apply_config` semantics remain design gates |
+| `Config`, `ConfigError`, `flash::Error` | `Config` is near-empty (multi-core strategy + unstable capacity override) and `#[non_exhaustive]` — grows only as real needs appear (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)) |
 | `peripherals.FLASH` stable | flipped at stabilization, not before |
 
 Everything else in the design (async, encrypted, `chip_info`, `erase_chip`, the capacity-override setter, trait impls) lands **unstable**. Two of those are nonetheless *on* the fast path because the D2 consumer migration needs them: the embedded-storage trait impls (PR B) and encrypted access (PR C) — unstable, but D2-blocking. External SPI flash and chip configuration are out of scope entirely ([FLASH-DEFERRED.md](FLASH-DEFERRED.md)).
@@ -25,21 +25,21 @@ Changelog and migration-guide entries for every PR go in the **PR description** 
 The stable surface, landed unstable via `unstable_driver!`.
 
 **Scope**
-- `esp-rom-sys`: bind `esp_rom_spiflash_read_user_cmd` (all chips — the private RDID/detection primitive, design [B2](FLASH-DESIGN.md#b2--read_user_cmd-availability-and-shape)) and `esp_rom_spiflash_erase_chip` (all chips — on S2 by adding the legacy-family ld alias Espressif omitted, `esp_rom_spiflash_erase_chip = SPIEraseChip`; design [B1](FLASH-DESIGN.md#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap) correction / [A15](FLASH-DESIGN.md#a15--s2-erase_chip-bind-the-raw-rom-symbol)). Neither is bound in the existing implementation.
-- `esp-hal/src/flash/{mod,driver,rom}.rs`: `Flash<'d, Dm>` (Blocking-only); every operation on its dedicated `esp_rom_spiflash_*` function — no backend enum, no custom-command machinery (design [A12](FLASH-DESIGN.md#a12--internal-only-scope-the-external-backend-splits-out)/[A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)).
+- `esp-rom-sys`: bind `esp_rom_spiflash_read_user_cmd` (all chips — the private RDID/detection primitive, design [B2](FLASH-DESIGN.md#b2-read_user_cmd-availability-and-shape)) and `esp_rom_spiflash_erase_chip` (all chips — on S2 by adding the legacy-family ld alias Espressif omitted, `esp_rom_spiflash_erase_chip = SPIEraseChip`; design [B1](FLASH-DESIGN.md#b1-dedicated-rom-functions-and-the-s2-erase_chip-gap) correction / [A15](FLASH-DESIGN.md#a15-s2-erase_chip-binds-the-raw-rom-symbol)). Neither is bound in the existing implementation.
+- `esp-hal/src/flash/{mod,driver,rom}.rs`: `Flash<'d, Dm>` (Blocking-only); every operation on its dedicated `esp_rom_spiflash_*` function — no backend enum, no custom-command machinery (design [A12](FLASH-DESIGN.md#a12-internal-only-scope-the-external-backend-splits-out)/[A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)).
 - Capacity detection (`g_rom_flashchip` on ESP32, RDID via `read_user_cmd` elsewhere) → `ConfigError::DetectionFailed`; unstable `with_capacity` override as the escape hatch — capacity 0 never exists as a driver state.
-- Chunked read/write/erase with per-chunk critical sections; `AutoPark` default with lock-before-park ordering (+ unstable `Error`/`Ignore` strategies); internal-RAM residency bounce for write sources and read destinations (flash *and* PSRAM; driver-owned bounce buffer, placement-validated at construction → `ConfigError::DriverPlacedInPsram`); near-empty `#[non_exhaustive]` `Config`.
-- Free unstable extras (ROM fns already exist): `chip_info()`, `erase_chip()` with the agreed doc block (all 10 chips; S2 semantics check below).
+- Chunked read/write/erase with per-chunk critical sections; `AutoPark` default with lock-before-park ordering (+ unstable `Error`/`Ignore` strategies); internal-RAM residency bounce for write sources and read destinations (flash *and* PSRAM); resolve the placement-enforcement and direct-read chunk-size gates in the design before implementation; near-empty `#[non_exhaustive]` `Config`.
+- Free unstable extras (ROM fns already exist): `chip_info()` after capacity-override ID behavior is defined; `erase_chip()` with the agreed doc block (all 10 chips; S2 semantics check below).
 - `esp-metadata/src/cfg.rs`: add a `flash` driver to `driver_configs!` (no such id exists); `esp-metadata/devices/*/soc.toml`: `[device.flash]` entry + `cargo xtask update-metadata` (`flash_driver_supported`, README matrix row). FLASH singleton **stays unstable**.
 - Module docs per design (doc_replace, `chip!()`, Limitations block).
 
-**Tests**: new `hil-test/src/bin/flash.rs` (read/write/erase round-trip, capacity detection, bounds/alignment errors, PSRAM-buffer bounce and PSRAM-placed-driver rejection where PSRAM exists) — esp-storage's `storage.rs` test remains untouched and green in parallel. Plus three **go/no-go checks** — the first two moved forward from stabilization (cheap to run, and a failure changes stable contracts — they belong here, not at F), the third new with the S2 alias decision:
+**Tests**: new `hil-test/src/bin/flash.rs` (read/write/erase round-trip, capacity detection, bounds/alignment errors, PSRAM-buffer bounce and final driver-placement enforcement where PSRAM exists) — esp-storage's `storage.rs` test remains untouched and green in parallel. Plus three **go/no-go checks** — the first two moved forward from stabilization (cheap to run, and a failure changes stable contracts — they belong here, not at F), the third new with the S2 alias decision:
 
-- dual-core read soundness: core 1 in an XIP hot loop, core 0 hammering `read` — verdict recorded in stable `read` docs (design [A4](FLASH-DESIGN.md#a4--multi-core-stable-default-autopark))
-- ESP32 debug build (opt-level 0) of the flash HIL test — confirms dropping esp-storage's opt-level requirement (design [A2](FLASH-DESIGN.md#a2--esp32-opt-level-requirement-dropped): confirmed "in PR A, before anything stabilizes")
-- S2 `SPIEraseChip` completion-wait semantics: one-off **manual** check on an S2 devkit (chip erase is destructive — not a CI HIL case; design [A15](FLASH-DESIGN.md#a15--s2-erase_chip-bind-the-raw-rom-symbol)); fallback is wrapping the call with the S2-aliased `esp_rom_spiflash_wait_idle`
+- dual-core read soundness: core 1 in an XIP hot loop, core 0 hammering `read` — verdict recorded in stable `read` docs (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark))
+- ESP32 debug build (opt-level 0) of the flash HIL test — confirms dropping esp-storage's opt-level requirement (design [A2](FLASH-DESIGN.md#a2-esp32-opt-level-requirement-dropped): confirmed "in PR A, before anything stabilizes")
+- S2 `SPIEraseChip` completion-wait semantics: one-off **manual** check on an S2 devkit (chip erase is destructive — not a CI HIL case; design [A15](FLASH-DESIGN.md#a15-s2-erase_chip-binds-the-raw-rom-symbol)); fallback is wrapping the call with the S2-aliased `esp_rom_spiflash_wait_idle`
 
-**Exit**: lint-packages on c6/s3/esp32/p4, doc-tests, HIL green on at least c6 + s3 + esp32 — including the ESP32 opt-level-0 run and the dual-core read verdict.
+**Exit**: lint-packages on c6/s3/esp32/p4, doc-tests, HIL green on at least c6 + s3 + esp32 — including the ESP32 opt-level-0 run, the dual-core read verdict, and the S2 completion-semantics check.
 
 ### PR B — embedded-storage trait impls (size: S) — after A
 
@@ -50,8 +50,8 @@ The stable surface, landed unstable via `unstable_driver!`.
 ### PR C — Encrypted access + MMU port (size: M) — after A, parallel with B
 
 - Port `esp-storage/src/mmu.rs` (incl. P4 dual-map variant) as private `esp-hal/src/flash/mmu.rs`.
-- `read_encrypted` / `write_encrypted` (unstable) — semantics matching esp-storage's whole-sector RMW wrapper (decrypted read → merge → erase → rewrite; the ROM primitive itself is 32-byte-granular, design [C4](FLASH-DESIGN.md#c4--encrypted-access-and-mmu)). Errors when flash encryption is off, matching the existing behavior. Bootloader's `EncryptedNorFlashRegion` keeps `WRITE_SIZE = 4096`.
-- Extend `hil-test/src/bin/flash.rs` with the encrypted tests **in the encryption-off degenerate mode** — which is all `storage.rs` covers (no CI device has encryption eFuses burned; a true encrypted round-trip is out of fleet scope).
+- `read_encrypted` / `write_encrypted` (unstable) — semantics matching esp-storage's whole-sector RMW wrapper (decrypted read → merge → erase → rewrite; the ROM primitive itself is 32-byte-granular, design [C4](FLASH-DESIGN.md#c4-encrypted-access-and-mmu)). `write_encrypted` errors when flash encryption is off, matching the existing behavior. Bootloader's `EncryptedNorFlashRegion` keeps `WRITE_SIZE = 4096`; resolve the full-sector scratch-storage gate before implementation.
+- Extend `hil-test/src/bin/flash.rs` with encrypted reads in the encryption-off mode and encrypted writes behind an explicit test-only bypass of the production guard; production writes still return `NotSupported` when encryption is off. No CI device has encryption eFuses burned, so a true encrypted round-trip is out of fleet scope.
 
 ### PR D1 — Bootloader flash seam + host-test decoupling (size: M) — independent of A/B/C; lands any time before D2
 
@@ -83,8 +83,8 @@ The proof-of-fire for the stable API; with D1 landed, mostly mechanical.
 - Run the stabilization gates (checklist below).
 - Flip `stable = true` on FLASH in 10 `soc.toml`s + `update-metadata`.
 - Remove `unstable` gating from the ship-list items; API baseline regeneration; README matrix to ✔️.
-- Decide the deferred question: embedded-storage trait impls stabilize on the 0.3 suffix dep, or wait for 1.0 (design [A9](FLASH-DESIGN.md#a9--embedded-storage-trait-stabilization-deferred) — decision owner is this PR). **Required gate, not optional**: most of the practical de-unstabling value sits here — the dominant consumers use the traits, and the bootloader stays on unstable regardless (encrypted API).
-- The capacity-override setter stays unstable unless a stable user has demonstrably needed it (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)) — record the verdict either way.
+- Decide the deferred question: embedded-storage trait impls stabilize on the 0.3 suffix dep, or wait for 1.0 (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-stabilization-deferred) — decision owner is this PR). **Required gate, not optional**: most of the practical de-unstabling value sits here — the dominant consumers use the traits, and the bootloader stays on unstable regardless (encrypted API).
+- The capacity-override setter stays unstable unless a stable user has demonstrably needed it (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)) — record the verdict either way.
 - Migration guide + changelog entries via PR description per CONTRIBUTING.
 
 ## Critical path
@@ -109,37 +109,37 @@ The full verification inventory for the effort; individual PRs run the subset th
 6. `cargo xtask run doc-tests <CHIP>` + `cargo xtask build documentation`
 7. Build flash examples and `esp-bootloader-esp-idf`
 8. `cargo xtask host-tests` — requires the D1 mock decoupling (and the D1 xtask `embedded-storage` fix)
-9. HIL: new `flash.rs` test (replaces `storage.rs`) — encrypted API covered in its **encryption-off degenerate mode** only (all CI devices have encryption disabled; a true encrypted round-trip needs an eFuse-burned board — out of fleet scope, recorded, not gated)
-10. HIL: `flash.rs` on ESP32 built at opt-level 0 — confirms dropping the esp-storage opt-level requirement (design [A2](FLASH-DESIGN.md#a2--esp32-opt-level-requirement-dropped); first run in PR A)
+9. HIL: new `flash.rs` test (replaces `storage.rs`) — encrypted reads use the encryption-off mode; encrypted writes use an explicit test-only bypass while production writes still reject encryption-off hardware (all CI devices have encryption disabled; a true encrypted round-trip needs an eFuse-burned board — out of fleet scope, recorded, not gated)
+10. HIL: `flash.rs` on ESP32 built at opt-level 0 — confirms dropping the esp-storage opt-level requirement (design [A2](FLASH-DESIGN.md#a2-esp32-opt-level-requirement-dropped); first run in PR A)
 11. HIL: OTA slot-switch round-trip — verifies the `otadata` update (explicit erase + write, guarding against sub-sector corruption/bricking after dropping the `Storage` RMW family)
 12. qa-test: `multicore_flash` on S3
-13. HIL: dual-core read soundness — core 1 in an XIP hot loop while core 0 hammers `read` (design [A4](FLASH-DESIGN.md#a4--multi-core-stable-default-autopark); first run in PR A)
+13. HIL: dual-core read soundness — core 1 in an XIP hot loop while core 0 hammers `read` (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark); first run in PR A)
 
 ## Stabilization gates (derived from the verification checklist above)
 
-Checklist items not repeated here: fmt-packages (#5) runs in every PR's CI, and the example/bootloader builds (#7) are D2's own exit criteria. The semver-baseline gate comes from the design's stabilization-target section rather than the checklist.
+Checklist items not repeated here: fmt-packages (#5) runs in every PR's CI, and the example/bootloader builds (#7) are D2's own exit criteria. The semver-baseline gate comes from the design's stable-target section rather than the checklist.
 
 - [ ] lint-packages: esp32c6, esp32s3, esp32, esp32p4
 - [ ] doc-tests + documentation build
-- [ ] HIL `flash` test green on all HIL-covered chips (encrypted API in its encryption-off mode — a true encrypted round-trip is out of fleet scope, design [C4](FLASH-DESIGN.md#c4--encrypted-access-and-mmu))
-- [ ] Re-confirm the two PR A go/no-go verdicts still hold: ESP32 at opt-level 0 (design [A2](FLASH-DESIGN.md#a2--esp32-opt-level-requirement-dropped)) and dual-core read soundness (design [A4](FLASH-DESIGN.md#a4--multi-core-stable-default-autopark); outcome recorded in `read` docs) — **first run in PR A**, regression re-checks here
+- [ ] HIL `flash` test green on all HIL-covered chips (encryption-off reads, test-bypass writes, and production write rejection; a true encrypted round-trip is out of fleet scope, design [C4](FLASH-DESIGN.md#c4-encrypted-access-and-mmu))
+- [ ] Re-confirm the two PR A go/no-go verdicts still hold: ESP32 at opt-level 0 (design [A2](FLASH-DESIGN.md#a2-esp32-opt-level-requirement-dropped)) and dual-core read soundness (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark); outcome recorded in `read` docs) — **first run in PR A**, regression re-checks here
 - [ ] HIL OTA slot-switch round-trip through the migrated bootloader (otadata explicit erase + write)
 - [ ] qa-test `multicore_flash` on S3 (AutoPark default + unstable strategies)
 - [ ] host-tests green on the bootloader's mock, with `embedded-storage` enabled in the xtask run (fixed in D1)
-- [ ] embedded-storage trait-impl decision recorded (design [A9](FLASH-DESIGN.md#a9--embedded-storage-trait-stabilization-deferred)); capacity-override verdict recorded (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch))
+- [ ] embedded-storage trait-impl decision recorded (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-stabilization-deferred)); capacity-override verdict recorded (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch))
 - [ ] Semver baseline updated; `x. y. z` release notes drafted
 
 ## Explicitly off the fast path
 
 | Deferred item | Where | Unblocked by |
 |---------------|-------|--------------|
-| `into_async` + async trait impls (chunk-yield internal async) | design, [Private internals](FLASH-DESIGN.md#private-internals-romrs-mmurs) | PR A |
-| External SPI NOR driver (own type; the former `new_spi` backend) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §1 | a committed implementer (split rationale: design [A12](FLASH-DESIGN.md#a12--internal-only-scope-the-external-backend-splits-out)) |
-| Chip configuration (`ChipConfig` vocabulary: geometry/command/timing overrides) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §2 | a real custom-chip need (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)) |
-| Internal custom commands (`common_command` binding + host-context hardware spike) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §3 | chip configuration returning |
+| `into_async` + async trait impls (chunk-yield internal async) | design, [Private internals](FLASH-DESIGN.md#private-internals-romrs-and-mmurs) | PR A |
+| External SPI NOR driver (own type; the former `new_spi` backend) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §1 | a committed implementer (split rationale: design [A12](FLASH-DESIGN.md#a12-internal-only-scope-the-external-backend-splits-out)) |
+| Chip configuration (`ChipConfig` vocabulary: geometry/command/timing overrides) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §2 | a real custom-chip need (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)) |
+| Internal custom commands (`common_command` binding + host-context hardware spike) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §3 | chip configuration returning for a demonstrated internal need |
 | Quad/Dual IO modes | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §1 | the external driver |
 | Behavioral chip trait | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §4 | a real chip that needs it |
-| Public flash mapping API (lookup over existing mappings / mapping creation) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §5 | a real zero-copy consumer + an MMU-page ownership design (design [A16](FLASH-DESIGN.md#a16--public-mmap-cut-mmu-machinery-stays-private)) |
+| Public flash mapping API (lookup over existing mappings / mapping creation) | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §5 | a real zero-copy consumer + an MMU-page ownership design (design [A16](FLASH-DESIGN.md#a16-public-mmap-cut-mmu-machinery-stays-private)) |
 
 ## File inventory (across all PRs)
 
@@ -161,7 +161,7 @@ Single reference table of everything the effort touches; per-PR scope above is a
 | `xtask` (host-tests invocation) | Enable the bootloader's `embedded-storage` feature so `nor_flash_tests` compiles | D1 |
 | `examples/peripheral/flash_read_write/` | Migrate to `esp_hal::flash` | D2 |
 | `examples/ota/update/` | Migrate (writes app image via `FlashRegion::write`) | D2 |
-| `hil-test/src/bin/flash.rs` | **Create** — replaces `storage.rs`; encrypted coverage (encryption-off mode) moves here | A (+ C: encrypted tests) |
+| `hil-test/src/bin/flash.rs` | **Create** — replaces `storage.rs`; encrypted coverage moves here with explicit encryption-off and test-bypass cases | A (+ C: encrypted tests) |
 | `hil-test/src/bin/storage.rs` | Retire once `flash.rs` covers it; HIL coverage stays continuous | D2 |
 | `hil-test/src/bin/alloc_psram.rs` | `esp_storage::ll::spiflash_write` → `Flash::write` | D2 |
 | `qa-test/src/bin/multicore_flash.rs` | Builder strategies → `Config` strategy | D2 |
