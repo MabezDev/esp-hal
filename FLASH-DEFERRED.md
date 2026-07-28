@@ -1,6 +1,6 @@
 # `esp_hal::flash` — Deferred material (annex)
 
-Extracted from [FLASH-DESIGN.md](FLASH-DESIGN.md) on 2026-07-21, when the external SPI backend was split out of `Flash` (design [A12](FLASH-DESIGN.md#a12--internal-only-scope-the-external-backend-splits-out)) and chip configuration was cut from the internal driver (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)). **Non-normative**: this is a parts shelf, not a plan — nothing here is committed work, and nothing on the fast path depends on it. Evidence entries carry their original verification dates; re-verify against current ROMs/IDF sources before building on them.
+Extracted from [FLASH-DESIGN.md](FLASH-DESIGN.md) when the external SPI backend was split out of `Flash` (design [A12](FLASH-DESIGN.md#a12--internal-only-scope-the-external-backend-splits-out)) and chip configuration was cut from the internal driver (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)). **Non-normative**: this is a parts shelf, not a plan — nothing here is committed work, and nothing on the fast path depends on it. Re-verify evidence against current ROMs/IDF sources before building on it.
 
 Contents:
 1. [External SPI NOR flash driver](#1-external-spi-nor-flash-driver) — the former `Spi` backend, now a future standalone driver
@@ -19,7 +19,7 @@ Contents:
 
 ### Design fragments worth keeping
 
-- **Constructor** (former decision A8, 2026-07-16): the driver takes a *fully configured* `Spi` — pins including hardware CS, mode, frequency — and consumes it; the flash driver does not route pins or own bus setup. As a standalone type this decision is **reopened**: a generic `SpiDevice` (embedded-hal-bus) constructor becomes possible — the erased design could not carry type parameters, a standalone driver can. Bus sharing (display + flash on one SPI) is a real use case the erasure excluded; the old module-doc limitation "an external flash chip owns its SPI bus" was a *consequence of the erasure*, not a law.
+- **Constructor** (former decision A8): the driver takes a *fully configured* `Spi` — pins including hardware CS, mode, frequency — and consumes it; the flash driver does not route pins or own bus setup. As a standalone type this decision is **reopened**: a generic `SpiDevice` (embedded-hal-bus) constructor becomes possible — the erased design could not carry type parameters, a standalone driver can. Bus sharing (display + flash on one SPI) is a real use case the erasure excluded; the old module-doc limitation "an external flash chip owns its SPI bus" was a *consequence of the erasure*, not a law.
 - **Execution model**: every operation lowers to a private `FlashCommand` (command / address / dummy / data phases) executed as a half-duplex master transaction, building on the existing SPI master half-duplex API (`Command`/`Address` phases + DMA + hardware CS) — a pattern already proven in-tree (C7 below). Busy-waits are RDSR polling against the chip's busy-status mask with timeouts, never fixed delays.
 - **Async**: start a DMA transfer, await completion via interrupt — genuinely interrupt/DMA-driven, unlike the internal driver's chunk-yield async. `into_async` here really does bind a handler (and inherits the `Async: !Send` contract meaningfully).
 - **Error design**: the external driver owns its own error type (DMA failure variants etc.) — no longer constrained to share `flash::Error` (see the superseded note in design [A6](FLASH-DESIGN.md#a6--error-type-shape)).
@@ -33,7 +33,7 @@ Contents:
 - Config shape — probably takes the `ChipConfig` vocabulary (§2) directly; there is no multi-core/parking concern and no residency rule, so the internal driver's `Config` does not apply.
 - Trait unification story with `esp_hal::flash::Flash` (embedded-storage impls, `READ_SIZE`/`WRITE_SIZE`/`ERASE_SIZE` from `ChipConfig` geometry vs consts).
 
-### C7 — External-backend prior art (moved 2026-07-21; gathered 2026-07-20)
+### C7 — External-backend prior art
 
 `qa-test/src/bin/qspi_flash.rs` already drives a GD25Q64C on SPI2 with raw half-duplex commands (0x06/0x20/0x32/0xEB) and fixed `delay_millis(250)` waits — the external driver is that pattern productized. Its chip filter is `spi_master_supports_dma && !esp32p4`: the DMA-driven async path inherits the P4 SPI-DMA gap until that lands. The file stays as-is in-tree and becomes the external driver's qa test when that driver exists.
 
@@ -95,7 +95,7 @@ Capability errors surface **per operation, at the point of use** — never at co
 
 `FlashCommand` (the private phase-described transaction type) was the shared lowering between the `common_command` path and the external driver's SPI-master path.
 
-### B3 — common_command and the host context (moved 2026-07-21; verified 2026-07-16, corrections 2026-07-20)
+### B3 — common_command and the host context
 
 `spi_flash_hal_common_command` exists on **exactly S3/C2/C3/C5/C6/C61/H2** (verified against `esp-rom-sys/ld/`; zero hits under esp32/esp32s2/esp32p4). It executes a full `spi_flash_trans_t` — 8/16-bit command, address + bit length, dummy cycles, mosi and miso data (verified against IDF `components/hal/spi_flash_hal_common.inc`). Its absence is the precise reason full `ChipConfig` overrides were `NotSupported` on ESP32/S2/P4.
 
@@ -104,9 +104,9 @@ Capability errors surface **per operation, at the point of use** — never at co
 1. The 2nd-stage bootloader definitively does not initialize it: every bootloader flash op goes through the *legacy* `esp_rom_spiflash_*` API (`bootloader_flash.c:292` read, `:396-398` write, `:404`/`:422-425` erase), and no `bootloader_support` source uses the modern `esp_flash_*` driver at all.
 2. IDF *app* startup initializes it unconditionally (`components/esp_system/startup.c:341-342` → `esp_flash_init_default_chip()`, a full from-scratch probe in `esp_flash_spi_init.c` that fills **app-RAM** statics — `DRAM_ATTR esp_flash_default_host` / `default_chip` — and reads the ROM-boot-populated legacy `g_rom_flashchip` back as ground truth). This runs **even under `SPI_FLASH_ROM_IMPL`**, where `spi_flash_rom_impl_init()` wires only OS hooks (`flash_ops.c:124`) — Espressif's own code treats the ROM instance as uninitialized at app entry.
 3. No init function exists in any ROM export — neither esp-rom-sys's ld scripts nor IDF's full `components/esp_rom/*/ld/` set contains `esp_flash_init_default_chip` or any equivalent.
-4. ROM-side, confirmed by maintainer ROM knowledge (2026-07-20): ROM startup initializes only the `.data`/`.bss` sections of its reserved memory area and functionally populates only the legacy `g_rom_flashchip` (the `g_rom_` prefix marks ROM-populated data) — the ROM has no concept of the IDF-side esp_flash symbols.
+4. ROM-side, confirmed by maintainer ROM knowledge: ROM startup initializes only the `.data`/`.bss` sections of its reserved memory area and functionally populates only the legacy `g_rom_flashchip` (the `g_rom_` prefix marks ROM-populated data) — the ROM has no concept of the IDF-side esp_flash symbols.
 
-### A11 — Driver-built host context (settled 2026-07-20; moved 2026-07-21)
+### A11 — Driver-built host context
 
 Consequence of B3: a driver using `common_command` **builds its own host context**. `spi_flash_hal_common_command` takes the host instance as an argument, and the IDF-side init is a plain data fill (`memspi_host_init_pointers` + `ESP_FLASH_HOST_CONFIG_DEFAULT`) replicated in Rust as driver-owned data — the Rust equivalent of IDF's init, owned by value (also what kept `Flash<'_, Blocking>: Send` with no raw ROM pointers cached), lazily initialized on first step-3 use. No `esp_flash_default_chip` binding, no dependence on ROM-version or boot-time state.
 
@@ -126,7 +126,7 @@ A trait becomes justified only once a chip needs genuine *behavior* that `ChipCo
 
 ## 5. Public flash mapping API (`mmap`/`MappedFlash`)
 
-Cut from the committed surface 2026-07-21 (design [A16](FLASH-DESIGN.md#a16--public-mmap-cut-mmu-machinery-stays-private)): the bootloader establishes the running app's flash mappings before esp-hal executes, so the driver neither creates nor owns them. The MMU machinery itself ships regardless, as private internals (`mmu.rs`) for `read_encrypted`; what is deferred is any *public* mapping surface. Two candidate shapes, in ascending order of work:
+Cut from the committed surface (design [A16](FLASH-DESIGN.md#a16--public-mmap-cut-mmu-machinery-stays-private)): the bootloader establishes the running app's flash mappings before esp-hal executes, so the driver neither creates nor owns them. The MMU machinery itself ships regardless, as private internals (`mmu.rs`) for `read_encrypted`; what is deferred is any *public* mapping surface. Two candidate shapes, in ascending order of work:
 
 - **Lookup over existing mappings** (IDF `spi_flash_phys2cache` / `spi_flash_cache2phys` analogue): given a flash offset, return the virtual address — or a borrowed `&[u8]` view — if the region is currently cache-mapped (the app image's segments are, courtesy of the bootloader). Cheap: an MMU table walk, no allocation, no new mappings. Borrowing the driver gives the same no-write-while-viewing discipline `MappedFlash` had. No known consumer yet; that is the only reason it sits here and not in the design.
 - **Mapping creation** (IDF `spi_flash_mmap` / `esp_partition_mmap` analogue): map an arbitrary flash region — e.g. an asset partition, which is *not* pre-mapped by the bootloader — into free MMU pages for zero-copy reads. This is the shape the original design called `mmap`, and it requires what esp-hal lacks: an MMU-page ownership story (free-slot allocation and accounting, coexistence with PSRAM init — which also programs MMU entries — and with the transient encrypted-read mappings, unmap-on-drop, cache invalidation policy). Design it against a real consumer, on top of whatever MMU allocator esp-hal grows.

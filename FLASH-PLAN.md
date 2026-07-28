@@ -6,7 +6,7 @@ Companion to [FLASH-DESIGN.md](FLASH-DESIGN.md), which is the authoritative whol
 
 | Item | Notes |
 |------|-------|
-| `Flash<'d, Dm: DriverMode>` | `Dm` ships day one; only `Blocking` is usable on the fast path |
+| `Flash<'d, Dm: DriverMode>` | `Dm` ships in the initial version; only `Blocking` is usable on the fast path |
 | `Flash::new(FLASH, Config)` | `DetectionFailed` instead of silent capacity-0; unstable `with_capacity` escape hatch (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)) |
 | `read` / `write` / `erase` / `capacity` / `apply_config` | chunked ROM ops, AutoPark multi-core default (lock-before-park), internal-RAM residency bounce (write sources *and* read destinations — flash and PSRAM are both cache-mapped); driver-owned bounce buffer, placement-validated at construction (`ConfigError::DriverPlacedInPsram`) |
 | `Config`, `ConfigError`, `flash::Error` | `Config` is near-empty (multi-core strategy + unstable capacity override) and `#[non_exhaustive]` — grows only as real needs appear (design [A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)) |
@@ -25,12 +25,12 @@ Changelog and migration-guide entries for every PR go in the **PR description** 
 The stable surface, landed unstable via `unstable_driver!`.
 
 **Scope**
-- `esp-rom-sys`: bind `esp_rom_spiflash_read_user_cmd` (all chips — the private RDID/detection primitive, design [B2](FLASH-DESIGN.md#b2--read_user_cmd-availability-and-shape)) and `esp_rom_spiflash_erase_chip` (all chips — on S2 by adding the legacy-family ld alias Espressif omitted, `esp_rom_spiflash_erase_chip = SPIEraseChip`; design [B1](FLASH-DESIGN.md#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap) correction / [A15](FLASH-DESIGN.md#a15--s2-erase_chip-bind-the-raw-rom-symbol)). Neither is bound today.
+- `esp-rom-sys`: bind `esp_rom_spiflash_read_user_cmd` (all chips — the private RDID/detection primitive, design [B2](FLASH-DESIGN.md#b2--read_user_cmd-availability-and-shape)) and `esp_rom_spiflash_erase_chip` (all chips — on S2 by adding the legacy-family ld alias Espressif omitted, `esp_rom_spiflash_erase_chip = SPIEraseChip`; design [B1](FLASH-DESIGN.md#b1--dedicated-rom-functions-and-the-s2-erase_chip-gap) correction / [A15](FLASH-DESIGN.md#a15--s2-erase_chip-bind-the-raw-rom-symbol)). Neither is bound in the existing implementation.
 - `esp-hal/src/flash/{mod,driver,rom}.rs`: `Flash<'d, Dm>` (Blocking-only); every operation on its dedicated `esp_rom_spiflash_*` function — no backend enum, no custom-command machinery (design [A12](FLASH-DESIGN.md#a12--internal-only-scope-the-external-backend-splits-out)/[A13](FLASH-DESIGN.md#a13--no-chip-configuration-at-launch)).
 - Capacity detection (`g_rom_flashchip` on ESP32, RDID via `read_user_cmd` elsewhere) → `ConfigError::DetectionFailed`; unstable `with_capacity` override as the escape hatch — capacity 0 never exists as a driver state.
 - Chunked read/write/erase with per-chunk critical sections; `AutoPark` default with lock-before-park ordering (+ unstable `Error`/`Ignore` strategies); internal-RAM residency bounce for write sources and read destinations (flash *and* PSRAM; driver-owned bounce buffer, placement-validated at construction → `ConfigError::DriverPlacedInPsram`); near-empty `#[non_exhaustive]` `Config`.
 - Free unstable extras (ROM fns already exist): `chip_info()`, `erase_chip()` with the agreed doc block (all 10 chips; S2 semantics check below).
-- `esp-metadata/src/cfg.rs`: add a `flash` driver to `driver_configs!` (no such id exists today); `esp-metadata/devices/*/soc.toml`: `[device.flash]` entry + `cargo xtask update-metadata` (`flash_driver_supported`, README matrix row). FLASH singleton **stays unstable**.
+- `esp-metadata/src/cfg.rs`: add a `flash` driver to `driver_configs!` (no such id exists); `esp-metadata/devices/*/soc.toml`: `[device.flash]` entry + `cargo xtask update-metadata` (`flash_driver_supported`, README matrix row). FLASH singleton **stays unstable**.
 - Module docs per design (doc_replace, `chip!()`, Limitations block).
 
 **Tests**: new `hil-test/src/bin/flash.rs` (read/write/erase round-trip, capacity detection, bounds/alignment errors, PSRAM-buffer bounce and PSRAM-placed-driver rejection where PSRAM exists) — esp-storage's `storage.rs` test remains untouched and green in parallel. Plus three **go/no-go checks** — the first two moved forward from stabilization (cheap to run, and a failure changes stable contracts — they belong here, not at F), the third new with the S2 alias decision:
@@ -50,16 +50,16 @@ The stable surface, landed unstable via `unstable_driver!`.
 ### PR C — Encrypted access + MMU port (size: M) — after A, parallel with B
 
 - Port `esp-storage/src/mmu.rs` (incl. P4 dual-map variant) as private `esp-hal/src/flash/mmu.rs`.
-- `read_encrypted` / `write_encrypted` (unstable) — semantics matching esp-storage's whole-sector RMW wrapper (decrypted read → merge → erase → rewrite; the ROM primitive itself is 32-byte-granular, design [C4](FLASH-DESIGN.md#c4--encrypted-access-and-mmu)). Errors when flash encryption is off, as today. Bootloader's `EncryptedNorFlashRegion` keeps `WRITE_SIZE = 4096`.
-- Extend `hil-test/src/bin/flash.rs` with the encrypted tests **in the encryption-off degenerate mode** — which is all `storage.rs` actually covers today (no CI device has encryption eFuses burned; a true encrypted round-trip is out of fleet scope).
+- `read_encrypted` / `write_encrypted` (unstable) — semantics matching esp-storage's whole-sector RMW wrapper (decrypted read → merge → erase → rewrite; the ROM primitive itself is 32-byte-granular, design [C4](FLASH-DESIGN.md#c4--encrypted-access-and-mmu)). Errors when flash encryption is off, matching the existing behavior. Bootloader's `EncryptedNorFlashRegion` keeps `WRITE_SIZE = 4096`.
+- Extend `hil-test/src/bin/flash.rs` with the encrypted tests **in the encryption-off degenerate mode** — which is all `storage.rs` covers (no CI device has encryption eFuses burned; a true encrypted round-trip is out of fleet scope).
 
 ### PR D1 — Bootloader flash seam + host-test decoupling (size: M) — independent of A/B/C; lands any time before D2
 
 `FlashRegion` is hardwired to the concrete `esp_storage::FlashStorage<'d>` (struct field `partitions.rs:608`, `as_flash_region`, unconditional `esp_storage` references) — there is no seam to swap behind, so cutting one is real refactor work on a published crate, not an afterthought of the swap. Do it while still esp-storage-backed, so the host-test churn is reviewed in isolation and D2 becomes mechanical.
 
-- **First, fix the gate itself**: `cargo xtask host-tests` runs the bootloader with only `std`, so `nor_flash_tests` (incl. the `WRITE_SIZE = 4096` wrapper assertions, `partitions.rs:1176-1194`) is compiled out today. Enable `embedded-storage` in the xtask invocation before touching anything that suite protects.
+- **First, fix the gate itself**: `cargo xtask host-tests` runs the bootloader with only `std`, so `nor_flash_tests` (incl. the `WRITE_SIZE = 4096` wrapper assertions, `partitions.rs:1176-1194`) is compiled out. Enable `embedded-storage` in the xtask invocation before touching anything that suite protects.
 - Introduce the internal flash abstraction behind `FlashRegion`'s accesses + an in-crate `cfg(test)` mock; port the host tests onto the mock.
-- `FlashRegion::write` takes ownership of the sector RMW (byte-granular public API preserved; today it leans on esp-storage's `Storage` RMW).
+- `FlashRegion::write` takes ownership of the sector RMW (byte-granular public API preserved; the existing implementation leans on esp-storage's `Storage` RMW).
 - esp-storage remains the hardware backend in this PR; `cargo xtask host-tests` stays green throughout.
 
 ### PR D2 — Consumer migration (size: M) — after B + C + D1
