@@ -143,8 +143,8 @@ Each configured operation would choose one of three paths:
 | Operation shape | Execution |
 |-----------------|-----------|
 | Standard command, including capacity-only override | dedicated `esp_rom_spiflash_*` function on every supported chip |
-| Command and response only, such as status or JEDEC ID | `esp_rom_spiflash_read_user_cmd` on every supported chip |
-| Any other custom command, including command-only, address, dummy, write-data, or custom geometry shapes | `spi_flash_hal_common_command` on S3/C2/C3/C5/C6/C61/H2; `NotSupported` on ESP32/S2/P4 |
+| Command with a one-byte response, such as status | `esp_rom_spiflash_read_user_cmd` on every supported chip |
+| Any other custom command, including three-byte JEDEC ID, command-only, address, dummy, write-data, or custom geometry shapes | `spi_flash_hal_common_command` on S3/C2/C3/C5/C6/C61/H2; `NotSupported` on ESP32/S2/P4 |
 
 Capability errors occur when an operation is used. The driver does not reject
 an entire configuration because an unused operation is unsupported.
@@ -257,3 +257,99 @@ remain excluded while the view exists.
 
 Design a public API only for a real zero-copy consumer and after MMU page
 ownership has a clear home.
+
+## 6. Encrypted sector overwrite
+
+The committed `write_encrypted()` API matches ESP-IDF. It writes a
+16-byte-aligned range into previously erased flash and never erases
+implicitly.
+
+A future helper may provide overwrite semantics for arbitrary bytes:
+
+```text
+read decrypted sector -> merge bytes -> erase sector -> rewrite encrypted
+```
+
+That helper needs 4096 bytes of internal-RAM scratch or caller-provided
+workspace. Its name, scratch ownership, cancellation behavior, and power-loss
+semantics remain undesigned.
+
+### Activation condition
+
+Add this helper only for a real user that cannot follow erase-before-write
+semantics.
+
+## 7. Dedicated whole-chip erase
+
+The current driver does not expose a dedicated whole-chip erase operation. The
+ROM primitive is deliberately difficult to use safely:
+
+- it is one unchunked call;
+- local interrupts stay disabled for the whole operation;
+- the other core stays parked under `AutoPark`;
+- no watchdog or progress callback can run inside the call;
+- it erases the running program's own code.
+
+It is coherent mainly for a flasher stub whose code, data, and stack are fully
+resident in internal RAM. A future API must make that narrow execution model
+clear instead of presenting whole-chip erase as an ordinary driver operation.
+If an inherent `erase_chip()` method is selected, it must remain unstable,
+carry `#[ram]`, and document that watchdog or progress servicing is not
+possible during the ROM call.
+
+### ROM evidence and ESP32-S2 gap
+
+The dedicated `esp_rom_spiflash_erase_chip` symbol exists on every target
+except ESP32-S2. ESP32-S2 instead exports `SPIEraseChip = 0x400170ec`
+(`esp32s2.rom.ld:612`) and omits the legacy alias. IDF release/v5.2 at
+`72d06017df` shows:
+
+1. `esp32s2.rom.spiflash_legacy.ld` aliases the other legacy operations.
+2. IDF does not call the legacy chip-erase name.
+3. The compiled ROM patch defines `esp_rom_spiflash_erase_chip` only for
+   ESP32.
+
+If this API is implemented, `esp-rom-sys` can add
+`esp_rom_spiflash_erase_chip = SPIEraseChip` for ESP32-S2. A destructive
+hardware check must still establish whether `SPIEraseChip` waits for
+completion. If it returns early, the wrapper must also call the S2
+`esp_rom_spiflash_wait_idle` alias.
+
+### Activation condition
+
+Design and implement this only for a concrete RAM-resident flasher or recovery
+consumer that cannot use chunked range erase.
+
+## 8. Async internal flash access
+
+The current design keeps the `Dm: DriverMode` type parameter but constructs
+only `Flash<'_, Blocking>`. It has no `into_async()` method and no async trait
+implementations.
+
+The ROM operations are blocking. A future async wrapper could yield only
+between chunks, while the cache is active. Cancellation would leave all
+completed chunks committed and later chunks untouched, so a partly completed
+erase range would be valid but incomplete. Those semantics need to be useful
+to a real consumer before an async surface is added.
+
+### Activation condition
+
+Add an async state only when a consumer benefits from between-chunk yielding
+and accepts the resulting cancellation contract.
+
+## 9. Configurable bounce storage
+
+The current driver uses one private 256-byte static bounce buffer in internal
+RAM. A later design may make its size or storage configurable to trade
+internal RAM for fewer ROM calls.
+
+Possible forms include a fixed set of supported sizes, caller-provided
+internal-RAM workspace, or a configuration option that selects statically
+allocated storage. Any design must preserve exclusive access, guarantee
+internal-RAM residency, and keep plain slices usable without exposing buffer
+placement as part of the stable read or write contract.
+
+### Activation condition
+
+Add configurability only after measurements or a real consumer demonstrate
+that the fixed 256-byte buffer is the limiting trade-off.
