@@ -165,7 +165,20 @@ is defined in IDF's `components/hal/spi_flash_hal_common.inc`. It supports:
 - read data.
 
 The symbol exists on S3/C2/C3/C5/C6/C61/H2 in the `esp-rom-sys/ld/` files. It
-is absent on ESP32/S2/P4. This target set must be checked again before adding
+is absent on ESP32/S2/P4.
+
+There is a second, older ROM entry point that the target set above misses. The
+linker scripts also provide `SPI_Common_Command`, aliased as
+`esp_rom_spiflash_common_cmd` in each `*.rom.api.ld`, on **nine** targets:
+S2 (`esp32s2.rom.ld:605`), S3 (`:210`), C2, C3, C5, C61, C6, H2 and P4
+(`esp32p4.rom.ld:148`). Only ESP32 lacks it, and even there the function is
+present in the ROM at `0x4006246c` on both rev0 and rev300; it is simply not
+exported by `esp-rom-sys/ld/esp32/`.
+
+So if custom commands ever return, `esp_rom_spiflash_common_cmd` covers a wider
+target set than `spi_flash_hal_common_command`, including the S2 and P4 gaps.
+Its argument shape differs from `spi_flash_trans_t` and has not been
+reverse-engineered here. Check both symbols and both signatures before adding
 bindings.
 
 The ROM's `esp_flash_default_chip` cannot be assumed to be initialized in an
@@ -260,9 +273,16 @@ ownership has a clear home.
 
 ## 6. Encrypted sector overwrite
 
-The committed `write_encrypted()` API matches ESP-IDF. It writes a
-16-byte-aligned range into previously erased flash and never erases
-implicitly.
+The committed `write_encrypted()` API matches ESP-IDF. It writes an aligned
+range into previously erased flash and never erases implicitly.
+
+Note that on ESP32 a 16-byte-aligned edge already requires reading the adjacent
+16-byte block back decrypted and re-encrypting it unchanged, because the ROM row
+is 32 bytes
+([design B5](FLASH-DESIGN.md#b5-esp-idfs-encrypted-write-row-handling)). That is
+bounded, row-local, and never erases. The helper below is a different thing: a
+whole-sector erase and rewrite. Do not let the former be used to argue the latter
+is already half-built.
 
 A future helper may provide overwrite semantics for arbitrary bytes:
 
@@ -343,6 +363,13 @@ The current driver uses one private 256-byte static bounce buffer in internal
 RAM. A later design may make its size or storage configurable to trade
 internal RAM for fewer ROM calls.
 
+The buffer size bounds only the **staged** path. Buffers that are already in
+internal RAM and aligned go straight to ROM in 4096-byte chunks, so growing the
+buffer changes nothing for them
+([design](FLASH-DESIGN.md#chunk-size)). That decoupling is deliberate: an
+earlier revision tied both paths to the buffer, which meant this section could
+not be revisited without changing the chunking of buffers that are never staged.
+
 Possible forms include a fixed set of supported sizes, caller-provided
 internal-RAM workspace, or a configuration option that selects statically
 allocated storage. Any design must preserve exclusive access, guarantee
@@ -351,5 +378,6 @@ placement as part of the stable read or write contract.
 
 ### Activation condition
 
-Add configurability only after measurements or a real consumer demonstrate
-that the fixed 256-byte buffer is the limiting trade-off.
+Add configurability only after measurements show that staged transfers are a
+bottleneck for a real consumer. The PR A throughput comparison is the first
+place that would show up.
