@@ -273,16 +273,15 @@ ownership has a clear home.
 
 ## 6. Encrypted sector overwrite
 
-The committed `write_encrypted()` API matches ESP-IDF. It writes an aligned
-range into previously erased flash and never erases implicitly.
+The committed `write_encrypted()` API matches ESP-IDF. It writes an aligned range
+into previously erased flash and never erases implicitly.
 
-Note that on ESP32 a 16-byte-aligned edge already requires reading the adjacent
-16-byte block back decrypted and re-encrypting it unchanged, because the ROM row
-is 32 bytes
-([design B5](FLASH-DESIGN.md#b5-esp-idfs-encrypted-write-row-handling)). That is
-bounded, row-local, and never erases. The helper below is a different thing: a
-whole-sector erase and rewrite. Do not let the former be used to argue the latter
-is already half-built.
+If PR C settles on the uniform 16-byte contract
+([design A19](FLASH-DESIGN.md#a19-encrypted-writes-match-esp-idf)), ESP32 will
+decrypt and re-encrypt the adjacent 16-byte block at a row edge. That is bounded,
+row-local, and never erases. The helper below is a different thing: a whole-sector
+erase and rewrite. Do not let the former be used to argue the latter is already
+half-built.
 
 A future helper may provide overwrite semantics for arbitrary bytes:
 
@@ -359,9 +358,10 @@ and accepts the resulting cancellation contract.
 
 ## 9. Configurable bounce storage
 
-The current driver uses one private 256-byte static bounce buffer in internal
-RAM. A later design may make its size or storage configurable to trade
-internal RAM for fewer ROM calls.
+The current driver uses one private static bounce buffer in internal RAM, sized
+256 bytes to start with. A later design may make its size or storage configurable
+to trade internal RAM for fewer ROM calls; an `esp-config` option is the intended
+mechanism, since it keeps the size out of the public API.
 
 The buffer size bounds only the **staged** path. Buffers that are already in
 internal RAM and aligned go straight to ROM in 4096-byte chunks, so growing the
