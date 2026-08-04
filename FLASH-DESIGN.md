@@ -527,12 +527,25 @@ must preserve internal-RAM residency and exclusive access while the cache is
 disabled. Candidate forms are in
 [`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#9-configurable-bounce-storage).
 
-`READ_SIZE` is 1, so a read may start mid-word. The ROM read primitive requires
-a word-aligned offset and length, so an unaligned read stages an aligned
-superset through the bounce buffer and copies out the requested window. The
-usable payload of a staged chunk is therefore up to three bytes less than the
-buffer. Chunk arithmetic must account for that rather than assuming a full
-buffer per chunk.
+`READ_SIZE` is 1, so a read may start and end mid-word. The driver stages an
+aligned superset through the bounce buffer and copies out the requested window.
+
+The ROM read contract has a trap in it. The documented requirement is a
+word-aligned offset and length, but the implementation writes **whole words** to
+the destination and rounds a partial tail *up*: a 5-byte read stores 8 bytes
+([C6](#c6-buffers-and-read_size)). So the staging buffer must have word-rounded
+*capacity*, not merely word-rounded length, or the ROM overruns it by up to three
+bytes. Two consequences:
+
+- the usable payload of a staged chunk is up to three bytes less than the buffer,
+  so chunk arithmetic cannot assume a full buffer per chunk;
+- a caller's word-aligned slice is not a safe direct destination for an unaligned
+  *length*, because the rounding would write past its end. Such reads stage even
+  when the buffer itself would have qualified.
+
+The driver aligns the offset down rather than passing a byte address to ROM, even
+though at least one ROM implementation accepts one. That behavior is undocumented
+and not worth assuming uniform across ten targets.
 
 ## Encrypted access
 
@@ -670,11 +683,20 @@ multiwrite implementation.
 `NotAligned` and `OutOfBounds` map directly to the matching
 `NorFlashErrorKind`. Other errors map to `Other`.
 
-`READ_SIZE` is 1 unconditionally. Default `esp-storage` reports 4 and only
-reports 1 behind its non-default `bytewise-read` feature. Relaxing the constant
-is compatible for callers, but it changes what generic storage layers see, so
-migration notes should mention it and the HIL test should cover unaligned reads
-by default rather than under a feature.
+`READ_SIZE` is 1 unconditionally, and this is portable to every target. The
+capability is not new: `esp-storage`'s *inherent* `read` already supports unaligned
+offsets and lengths on all ten chips with no feature flag and no chip gating, so
+byte-granular reads are the shipped default and only the `NorFlash` constant
+disagrees with them. Its `bytewise-read` feature, which sets `READ_SIZE = 1`, has
+no chip gating either. The mechanism uses only the documented ROM contract, so it
+is portable by construction rather than by luck. See
+[C6](#c6-buffers-and-read_size).
+
+Relaxing the constant is compatible for callers but changes what generic storage
+layers see, so it needs a migration note. It also needs a HIL gate: no unaligned
+read is exercised on hardware today, because `bytewise-read` is off by default and
+every offset in the existing test is word-aligned. Like the dual-core read test,
+this is new coverage rather than a port.
 
 The legacy `ReadStorage` and `Storage` traits are not implemented. Callers that
 need a plain sub-sector update must perform the read-modify-write themselves.
@@ -784,6 +806,7 @@ because several of them pass trivially if written the obvious way.
 |------|----------------|
 | Read, write, erase, bounds and alignment | |
 | Direct and staged reads and writes across their respective chunk boundaries, plus unaligned reads whose aligned superset crosses one | off-by-one in the chunk arithmetic |
+| Unaligned read offsets *and* unaligned lengths, including a length that is 1, 2 and 3 bytes short of a word | the ROM's word-rounded tail overrunning the destination ([C6](#c6-buffers-and-read_size)). No unaligned read runs on hardware today, so this is new coverage |
 | Flash-resident and PSRAM buffers where PSRAM exists | the staging path being skipped |
 | Linked sections: every flash-operating method, the guard and the ROM wrappers are in RAM; `new`, `apply_config`, `capacity`, `chip_info` are not | the detection refresh being inlined into `new` |
 | ESP32 flash HIL test at optimization level 0 | the dropped `esp-storage` opt-level requirement |
@@ -1448,12 +1471,45 @@ Other chips use RDID and an esptool-derived table
 Aligned buffers go directly to ROM without a residency check
 (`common.rs:173-192`, `nor_flash.rs:129-137`). Unaligned and read-modify-write
 paths use 4-byte and 4096-byte stack buffers (`buffer.rs:12-14`,
-`storage.rs:55`).
-
-The `bytewise-read` feature is disabled by default
-(`Cargo.toml:59-65`), so default `esp-storage` has `READ_SIZE = 4`
-(`nor_flash.rs:10-16`). It implements `MultiwriteNorFlash`
+`storage.rs:55`). `esp-storage` implements `MultiwriteNorFlash`
 (`nor_flash.rs:242`).
+
+**Byte-granular reads are already portable.** Evidence that `READ_SIZE = 1` is
+achievable on every target, strongest first:
+
+| Evidence | Where |
+|----------|-------|
+| The inherent `read` documents "Unaligned offsets and lengths are supported" and has no `cfg` and no feature gate, so this is shipped default behavior on all ten chips | `storage.rs:4-10` |
+| `bytewise-read`, which sets `READ_SIZE = 1`, has no chip gating anywhere in the crate | `nor_flash.rs`, `buffer.rs` |
+| It is built and linted across every target in CI | `Cargo.toml` `check-configs`, `clippy-configs` |
+| The emulation uses only the documented ROM contract: align the offset down, round the length up, stage through a word-aligned buffer | `nor_flash.rs:38-56` |
+
+`bytewise-read` is nevertheless off by default (`Cargo.toml:59-65`), so default
+`esp-storage` reports `READ_SIZE = 4` (`nor_flash.rs:10-16`). No rationale is
+recorded: the feature predates the crate's import into this repository, so the
+reason is not in this history. The extra ROM call for a head or tail word is the
+plausible cost, but that is not evidenced.
+
+**The ROM rounds partial tails up, past the requested length.** From the ESP32 ROM
+patch source, `esp_rom_spiflash_read_data` in
+`components/esp_rom/patches/esp_rom_spiflash.c`:
+
+```c
+remain_word_num = (0 == (temp_length & 0x3)) ? (temp_length >> 2) : (temp_length >> 2) + 1;
+for (i = 0; i < remain_word_num; i++) {
+    *addr_dest++ = READ_PERI_REG(PERIPHS_SPI_FLASH_C0 + i * 4);
+}
+```
+
+`addr_dest` is a `uint32_t *` and the loop stores whole words, so a length of 5
+writes 8 bytes. Any destination must therefore have word-rounded capacity.
+
+The same function writes the flash address byte-granular
+(`WRITE_PERI_REG(PERIPHS_SPI_FLASH_ADDR, temp_addr << 8)`), so *that*
+implementation needs no offset alignment despite the documented requirement.
+`esp-storage` aligns the offset anyway, in both the inherent and the
+`bytewise-read` path, and the new driver follows suit: the permissive behavior is
+undocumented and was only confirmed for ESP32's patched implementation.
 
 ### C7: External-backend prior art
 

@@ -27,7 +27,7 @@ Three migration notes are easy to forget because nothing in the code will remind
 
 1. **`AutoPark` now stalls the other core for reads too.** `esp-storage` guards only writes and erases (`common.rs` hooks), so any dual-core consumer doing large reads sees new stalls. Frame it as a fix, not a tax: Espressif documents the cache-disable requirement as covering reads, so the old behaviour was under-guarded (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark), evidence [B7](FLASH-DESIGN.md#b7-espressifs-documented-spi1-concurrency-constraint)). Owner: PR A.
 2. **Migration is per binary, not per call site.** Both drivers consume `peripherals.FLASH`, so a binary holds one or the other and any dependency still using `esp-storage` blocks the switch (design [Migration is per binary](FLASH-DESIGN.md#migration-is-per-binary-not-incremental)). Owner: PR E, restated by D2.
-3. **`READ_SIZE` drops from 4 to 1.** Compatible for callers, but it changes what generic storage layers see (design [embedded-storage traits](FLASH-DESIGN.md#embedded-storage-traits)). Owner: PR B.
+3. **`READ_SIZE` drops from 4 to 1.** Compatible for callers, but it changes what generic storage layers see. Portable to every target: `esp-storage`'s inherent `read` already does unaligned reads unconditionally, and its `bytewise-read` feature has no chip gating (design [C6](FLASH-DESIGN.md#c6-buffers-and-read_size)). Note that no unaligned read is exercised on hardware today, so PR B owes new HIL coverage including lengths 1, 2 and 3 bytes short of a word. Owner: PR B.
 
 ### PR A — Driver core (size: L)
 
