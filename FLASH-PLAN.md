@@ -13,7 +13,9 @@ Companion to [FLASH-DESIGN.md](FLASH-DESIGN.md), which is the authoritative whol
 | `Config`, `ConfigError`, `flash::Error` | `Config` contains only the unstable multi-core strategy and is `#[non_exhaustive]`; `ConfigError` carries `UnknownFlashChip`. All three follow the guideline derive sets, including `Hash` and `defmt::Format` (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)) |
 | `peripherals.FLASH` stable | flipped at stabilization, not before |
 
-Everything else in the design (encrypted access, `chip_info`, and trait impls) lands **unstable**. Two of those are nonetheless *on* the fast path because the D2 consumer migration needs them: the embedded-storage trait impls (PR B) and encrypted access (PR C), both unstable but D2-blocking. Dedicated whole-chip erase, async access, external SPI flash, and chip configuration are out of scope entirely ([FLASH-DEFERRED.md](FLASH-DEFERRED.md)).
+Everything else in the design (encrypted access, `chip_info`, and trait impls) lands **unstable and stays that way**. Two of those are nonetheless *on* the fast path because the D2 consumer migration needs them: the embedded-storage trait impls (PR B) and encrypted access (PR C), both unstable but D2-blocking. Dedicated whole-chip erase, async access, external SPI flash, and chip configuration are out of scope entirely ([FLASH-DEFERRED.md](FLASH-DEFERRED.md)).
+
+Note what that means for PR F's value: the trait impls cannot stabilize before embedded-storage 1.0 (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-implementations-stay-unstable)), so PR F de-unstables the inherent methods and nothing else, and `esp-bootloader-esp-idf` stays an `unstable` consumer via the encrypted API regardless.
 
 ---
 
@@ -59,7 +61,7 @@ Plus two **go/no-go checks** moved forward from stabilization because a failure 
 ### PR C — Encrypted access + MMU port (size: M) — after A, parallel with B
 
 - Port `esp-storage/src/mmu.rs` (incl. P4 dual-map variant) as private `esp-hal/src/flash/mmu.rs`.
-- **Decide the alignment contract first.** ESP-IDF's public 16-byte contract and `esp-rom-sys`'s 32-byte note are both correct: the ESP32 ROM row is 32 bytes, and ESP-IDF bridges a 16-byte-aligned edge by reading the adjacent block back decrypted and re-encrypting it unchanged (design [B5](FLASH-DESIGN.md#b5-esp-idfs-encrypted-write-row-handling)). Either match ESP-IDF and implement that read-back on ESP32, or expose a per-chip alignment constant. Matching ESP-IDF is the recommendation, since the bootloader's OTA path is the dominant consumer. This is implementation work, not a HIL assertion, and it narrows the "no read-modify-write" rule to "no implicit erase, no change outside the requested range".
+- **Alignment contract: uniform 16 bytes on every chip** (design [A19](FLASH-DESIGN.md#a19-encrypted-writes-match-esp-idf)). ESP32's ROM row is 32 bytes, so implement ESP-IDF's bridge: for a start or end that is 16-byte but not 32-byte aligned, read the adjacent 16-byte block back decrypted and re-encrypt it unchanged as the other half of the row (design [B5](FLASH-DESIGN.md#b5-esp-idfs-encrypted-write-row-handling)). This is implementation work, not a HIL assertion. It narrows the "no read-modify-write" rule to "no implicit erase, no change outside the requested range", which the read-back satisfies since it rewrites the neighbour with exactly the bytes it read. The rejected alternative was a per-chip alignment constant, which would have leaked a `cfg` into the OTA path.
 - `read_encrypted` / `write_encrypted` (unstable) follow ESP-IDF semantics (design [C4](FLASH-DESIGN.md#c4-encrypted-access-and-mmu)). `write_encrypted` requires previously erased flash and never erases implicitly. `write_encrypted` returns `NotSupported` when encryption is off. `#[ram]` scoping matches PR A.
 - Extend `hil-test/src/bin/flash.rs` with encryption-off reads and encrypted writes behind an explicit test-only bypass of the production guard, the same `__test_esp_storage`-style cfg `esp-storage/src/encrypted.rs:51` uses today. Test chunk boundaries, erased-write behavior, alignment rejection, no implicit erase, and production `NotSupported`. On ESP32 specifically, exercise a 16-byte-aligned but not 32-byte-aligned write at both the start and the end of a range. No CI device has encryption eFuses burned, so a true encrypted round-trip remains out of fleet scope.
 
@@ -69,6 +71,7 @@ The partition access code is hardwired to the concrete `esp_storage::FlashStorag
 
 - **First, fix the gate itself**: `cargo xtask host-tests` runs the bootloader with only `std`, so `nor_flash_tests` is compiled out. Enable `embedded-storage` so the current surface is tested before D2 deliberately replaces it.
 - Introduce the internal flash abstraction behind partition accesses plus an in-crate `cfg(test)` mock; port the host tests onto the mock.
+- **The seam stays private.** `FlashRegion` does not become generic. Making the public types generic over `NorFlash` would break `Ota`, `OtaUpdater` and `next_partition` signatures on a published crate for no gain D1 needs, so the abstraction sits behind the existing types and their signatures are untouched. If downstream genericity is ever wanted, it is a separate, deliberate breaking change.
 - Keep the existing public partition wrappers and behavior in this seam-only PR. D2 owns their breaking correction.
 - esp-storage remains the hardware backend in this PR; `cargo xtask host-tests` stays green throughout.
 
@@ -85,7 +88,7 @@ The proof-of-fire for the stable API; with D1 landed, mostly mechanical.
 
 ### PR E — esp-storage deprecation notice (size: S) — after D2
 
-- README banner, crates.io description, crate-level doc banner pointing at `esp_hal::flash` + migration notes. First workspace deprecation — this sets the pattern.
+- **Documentation only**: README banner, crates.io description, crate-level doc banner pointing at `esp_hal::flash` plus migration notes. No `#[deprecated]` attributes. This is the workspace's first deprecation and it sets the pattern: while `esp_hal::flash`'s trait impls and encrypted API are still unstable, most users cannot fully migrate, so compiler warnings would be noise they can't action. `#[deprecated]` becomes appropriate once there is a stable migration target.
 - esp-storage stays published and untouched otherwise; it dies by attrition, not deletion.
 
 ### PR F — Stabilization (size: M) — after D2 + soak
@@ -93,7 +96,7 @@ The proof-of-fire for the stable API; with D1 landed, mostly mechanical.
 - Run the stabilization gates (checklist below).
 - Flip `stable = true` on FLASH in 10 `soc.toml`s + `update-metadata`.
 - Move `flash` out of the `unstable_driver!` block in `esp-hal/src/lib.rs` into a plain `#[cfg(flash_driver_supported)] pub mod flash;`. `unstable_driver!` compiles the module out entirely without the feature, so this is a code move, not an attribute removal. Remove `unstable` gating from the remaining ship-list items; API baseline regeneration; README matrix to ✔️.
-- Decide the deferred question: embedded-storage trait impls stabilize on the 0.3 suffix dep, or wait for 1.0 (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-stabilization-deferred) — decision owner is this PR). **Required gate, not optional**: most of the practical de-unstabling value sits here — the dominant consumers use the traits, and the bootloader stays on unstable regardless (encrypted API).
+- embedded-storage trait impls **stay unstable** and are not part of this PR; they become stabilization candidates at embedded-storage 1.0 (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-implementations-stay-unstable)). Nothing pre-1.0 has ever been stabilized in esp-hal, and making flash the exception would set a workspace precedent on the back of one driver. Be honest about the scope this leaves: PR F stabilizes the inherent `read`/`write`/`erase`/`capacity` only, and `esp-bootloader-esp-idf` remains an `unstable` consumer via the encrypted API either way.
 - Migration guide + changelog entries via PR description per CONTRIBUTING.
 
 ## Critical path
@@ -118,13 +121,13 @@ The full verification inventory for the effort; individual PRs run the subset th
 6. `cargo xtask run doc-tests <CHIP>` + `cargo xtask build documentation`
 7. Build flash examples and `esp-bootloader-esp-idf`
 8. `cargo xtask host-tests` — requires the D1 mock decoupling (and the D1 xtask `embedded-storage` fix)
-9. HIL: new `flash.rs` test (replaces `storage.rs`) - encrypted reads use the encryption-off mode; encrypted writes use an explicit test-only bypass while production writes still reject encryption-off hardware. Verify prior-erase behavior, alignment rejection, no implicit erase, and the ESP32 16-byte-aligned row edges. All CI devices have encryption disabled, so a true encrypted round-trip needs an eFuse-burned board and remains out of fleet scope.
+9. HIL: new `flash.rs` test (replaces `storage.rs`) - encrypted reads use the encryption-off mode; encrypted writes use an explicit test-only bypass while production writes still reject encryption-off hardware. Verify prior-erase behavior, 16-byte alignment rejection, no implicit erase, and the ESP32 row edges leaving the neighbouring 16-byte block intact. All CI devices have encryption disabled, so a true encrypted round-trip needs an eFuse-burned board and remains out of fleet scope.
 10. HIL: `flash.rs` on ESP32 built at opt-level 0 — confirms dropping the esp-storage opt-level requirement (design [A2](FLASH-DESIGN.md#a2-esp32-opt-level-requirement-dropped); first run in PR A)
 11. HIL: OTA slot-switch round-trip — verifies the `otadata` update (explicit erase + write, guarding against sub-sector corruption/bricking after dropping the `Storage` RMW family)
 12. qa-test: `multicore_flash` on S3
 13. HIL: dual-core read guard — core 1 in an XIP hot loop while core 0 hammers `read`; verify `AutoPark` stops cache-dependent execution for each ROM call and restores core 1 afterward (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark); first run in PR A)
 14. HIL: capacity decoded from the cached ID equals the known board capacity on every family; the ROM refresh via `esp_rom_spi_flash_update_id` links and returns the expected ID on the 9 targets that export it; on ESP32 the cached ID is correct under the ESP-IDF bootloader; a sentinel, the ROM W25Q16 default, or an unsupported density returns `Err(ConfigError::UnknownFlashChip)` (design [B2](FLASH-DESIGN.md#b2-the-cached-jedec-id-and-its-provenance); first run in PR A)
-15. HIL: read/write throughput versus `esp-storage` on one RISC-V and one Xtensa target (design [B6](FLASH-DESIGN.md#b6-esp-idf-chunk-sizes); first run in PR A)
+15. HIL: read/write throughput **and worst-case interrupt latency** versus `esp-storage` on one RISC-V and one Xtensa target. The direct chunk limits are ESP-IDF's 8192/16384, two to four times `esp-storage`'s sector, so latency is where that trade shows and throughput alone cannot reveal it (design [Chunk size](FLASH-DESIGN.md#chunk-size); first run in PR A)
 
 ## Stabilization gates (derived from the verification checklist above)
 
@@ -138,8 +141,8 @@ Checklist items not repeated here: fmt-packages (#5) runs in every PR's CI, and 
 - [ ] qa-test `multicore_flash` on S3 (AutoPark default + unstable strategies)
 - [ ] host-tests green on the bootloader's mock, with `embedded-storage` enabled in the xtask run (fixed in D1)
 - [ ] `flash` module moved out of `unstable_driver!`; `#[ram]` scoping still holds after the move
-- [ ] embedded-storage trait-impl decision recorded (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-stabilization-deferred)); cached identification validated against known board capacities on every supported family, with sentinel and unsupported-density inputs returning `ConfigError::UnknownFlashChip` (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch))
-- [ ] Encrypted-write alignment contract recorded, and the `esp-rom-sys` binding's doc comment reconciled with it (design [B5](FLASH-DESIGN.md#b5-esp-idfs-encrypted-write-row-handling))
+- [ ] Cached identification validated against known board capacities on every supported family, with sentinel, ROM-default and unsupported-density inputs returning `ConfigError::UnknownFlashChip` (design [A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)). The embedded-storage trait impls are **not** stabilized here (design [A9](FLASH-DESIGN.md#a9-embedded-storage-trait-implementations-stay-unstable))
+- [ ] Uniform 16-byte encrypted-write alignment holds on every chip, including the ESP32 row-edge read-back leaving the neighbouring block intact, and the `esp-rom-sys` binding's 32-byte doc comment is reconciled with it (design [A19](FLASH-DESIGN.md#a19-encrypted-writes-match-esp-idf))
 - [ ] Semver baseline updated; `x. y. z` release notes drafted
 
 ## Explicitly off the fast path
@@ -184,5 +187,5 @@ Single reference table of everything the effort touches; per-PR scope above is a
 | `qa-test/src/bin/multicore_flash.rs` | Builder strategies → `Config` strategy | D2 |
 | `qa-test/src/bin/qspi_flash.rs` | **Stays as-is** — prior art for the deferred external driver ([FLASH-DEFERRED.md](FLASH-DEFERRED.md) §1) | — |
 | `hil-test/Cargo.toml`, `qa-test/Cargo.toml` | Feature wiring | A, D2 |
-| `esp-storage/` | Deprecation notice (first workspace deprecation — mechanism TBD: README + crates.io description + doc banner) | E |
+| `esp-storage/` | Deprecation notice, documentation only: README banner + crates.io description + crate doc banner, no `#[deprecated]` | E |
 | `FLASH-DEFERRED.md` | Reference — deferred-material annex (external driver, chip config, custom-command evidence) | — |

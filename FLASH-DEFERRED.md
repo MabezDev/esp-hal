@@ -276,9 +276,9 @@ ownership has a clear home.
 The committed `write_encrypted()` API matches ESP-IDF. It writes an aligned range
 into previously erased flash and never erases implicitly.
 
-If PR C settles on the uniform 16-byte contract
-([design A19](FLASH-DESIGN.md#a19-encrypted-writes-match-esp-idf)), ESP32 will
-decrypt and re-encrypt the adjacent 16-byte block at a row edge. That is bounded,
+The contract is a uniform 16 bytes
+([design A19](FLASH-DESIGN.md#a19-encrypted-writes-match-esp-idf)), so on ESP32 a
+row edge decrypts and re-encrypts the adjacent 16-byte block. That is bounded,
 row-local, and never erases. The helper below is a different thing: a whole-sector
 erase and rewrite. Do not let the former be used to argue the latter is already
 half-built.

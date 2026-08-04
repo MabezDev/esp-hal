@@ -40,7 +40,7 @@ The intended stable surface is:
 | `peripherals.FLASH` | yes | |
 | `chip_info()`, `ChipInfo` | | yes |
 | encrypted access | | yes |
-| embedded-storage trait implementations | | decision required at stabilization |
+| embedded-storage trait implementations | | yes, until embedded-storage 1.0 |
 | `MultiCoreStrategy`, `OtherCoreRunning` | | yes |
 
 The `Dm` parameter is part of the initial API. esp-hal mode parameters have no
@@ -48,9 +48,12 @@ default, so adding it after stabilization would break every explicit `Flash`
 type. Only `Blocking` is constructible in this design. A possible async API is
 deferred without removing the type-state parameter.
 
-The stable-only use case is direct calls to `read`, `write`, and `erase`. Most
-real consumers use embedded-storage traits or encrypted access. The trait
-stabilization decision is therefore a required gate, not optional follow-up.
+Be clear about how much this stabilizes. The stable surface is direct calls to
+`read`, `write`, `erase` and `capacity`. Most real consumers reach for the
+embedded-storage traits or encrypted access instead, and both stay unstable, so
+`esp-bootloader-esp-idf` remains an `unstable` consumer after PR F regardless.
+That is a consequence of workspace policy rather than of this driver; see
+[A9](#a9-embedded-storage-trait-implementations-stay-unstable).
 
 ## Scope and non-goals
 
@@ -447,25 +450,36 @@ PR A throughput numbers, since it is the per-chunk cost.
 
 ### Chunk size
 
-Chunk size is a throughput decision, not a buffer-management detail, so the two
-paths do not share a limit:
+Chunk size is a throughput decision, not a buffer-management detail, so the paths
+do not share a limit:
 
 | Path | Chunk limit |
 |------|-------------|
-| Direct, buffer already in internal RAM and aligned | 4096 bytes, matching `esp-storage` |
+| Direct read, buffer already in internal RAM and aligned | 16384 bytes |
+| Direct write, buffer already in internal RAM and aligned | 8192 bytes |
 | Staged through the bounce buffer | the size of the bounce buffer |
 | Erase | one sector or one block |
 
 Every chunk boundary pays a full guard: take the lock, park the other core,
 disable interrupts, suspend cache, call ROM, invalidate, resume, unpark, release.
 So the limit on the direct path, which needs no staging at all, should not be
-dictated by the bounce buffer. For scale, `esp-storage` chunks by sector
-([C2](#c2-chunking-and-critical-sections)) and ESP-IDF allows 8192 and 16384
-([B6](#b6-esp-idf-chunk-sizes)).
+dictated by the bounce buffer.
 
-Both limits are private implementation policy rather than stable guarantees, and
-the direct limit is the one the PR A throughput gate is meant to settle. Keeping
-the two independent also means
+The direct limits match ESP-IDF's `MAX_READ_CHUNK` and `MAX_WRITE_CHUNK`
+([B6](#b6-esp-idf-chunk-sizes)) rather than `esp-storage`'s sector-sized chunking
+([C2](#c2-chunking-and-critical-sections)). Adopting ESP-IDF's ceilings means
+adopting the upper bound that ESP-IDF itself picked to keep the system available,
+which is a better-argued number than a sector.
+
+It does mean the interrupts-disabled and cache-off window is two to four times
+longer than `esp-storage`'s on the direct path. That is the deliberate trade:
+fewer guard transitions for a longer worst-case window. PR A therefore has to
+measure **interrupt latency alongside throughput**, because throughput alone
+cannot show this cost, and a latency regression here would be a real behavior
+change for consumers with tight timing.
+
+Both limits are private implementation policy rather than stable guarantees.
+Keeping them independent also means
 [`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#9-configurable-bounce-storage) can revisit
 the buffer size later without changing the chunking of buffers that are never
 staged.
@@ -571,13 +585,14 @@ plaintext bytes.
 
 `write_encrypted()` follows ESP-IDF's `esp_flash_write_encrypted()` contract:
 
+- address and length must be multiples of 16 bytes, on every chip;
 - the destination must already be erased, and the driver never erases implicitly;
 - the driver never changes bytes outside the requested range;
-- writing an external flash chip is not supported;
-- address and length must be multiples of 16 bytes. **Pending the PR C
-  decision** in [A19](#a19-encrypted-writes-match-esp-idf): a uniform 16 bytes
-  costs a bounded row-local decrypt and re-encrypt on ESP32, and the alternative
-  is a per-chip constant of 32 there.
+- writing an external flash chip is not supported.
+
+The 16-byte contract is uniform by decision
+([A19](#a19-encrypted-writes-match-esp-idf)), which costs a bounded row-local
+decrypt and re-encrypt on ESP32; see [Row size](#row-size).
 
 This removes `esp-storage`'s implicit 4096-byte sector read-modify-write, which
 is a different thing from the ESP32 row handling above: no erase, and nothing
@@ -595,9 +610,15 @@ be decrypted and re-encrypted unchanged.
 
 This is why the `esp_rom_spiflash_write_encrypted` binding documents 32-byte
 alignment while ESP-IDF's public API promises 16: both are accurate, and ESP-IDF
-bridges the gap. The options and the recommendation are in
-[A19](#a19-encrypted-writes-match-esp-idf); the ESP-IDF implementation is in
-[B5](#b5-esp-idfs-encrypted-write-row-handling).
+bridges the gap.
+
+The driver bridges it the same way. On ESP32, a request whose start or end is
+16-byte but not 32-byte aligned reads the adjacent 16-byte block back decrypted
+and re-encrypts it unchanged as the other half of the row, following
+`esp_flash_write_encrypted` ([B5](#b5-esp-idfs-encrypted-write-row-handling)).
+The public contract is therefore 16 bytes on every chip, and callers need no
+`cfg`. The cost is that this read-back only round-trips correctly when encryption
+is actually enabled, which is already a precondition of the method.
 
 ### Encrypted chunking
 
@@ -695,9 +716,10 @@ The legacy `ReadStorage` and `Storage` traits are not implemented. Callers that
 need a plain sub-sector update must perform the read-modify-write themselves.
 
 The dependency uses the version-suffixed name `embedded-storage-03`. It is
-optional and enabled by `unstable`; no new cargo feature is added.
-Stabilization decides whether the blocking traits can stabilize on 0.3 or must
-wait for 1.0. See [A9](#a9-embedded-storage-trait-stabilization-deferred).
+optional and enabled by `unstable`; no new cargo feature is added. The
+implementations stay unstable, including through PR F, and the suffixed name keeps
+a later 1.0 implementation additive. See
+[A9](#a9-embedded-storage-trait-implementations-stay-unstable).
 
 ## Private internals: `rom.rs` and `mmu.rs`
 
@@ -791,30 +813,34 @@ Before stabilization:
   check is what catches it.
 - Measure read and write throughput against `esp-storage` on one RISC-V and one
   Xtensa target. A large regression means the chunk policy is wrong.
+- Measure worst-case interrupt latency during a large read and a large write on
+  the same targets. The direct chunk limits are two to four times
+  `esp-storage`'s, so this is where that trade shows up, and throughput alone
+  cannot reveal it.
 - Test encrypted reads in the encryption-off mode used by the CI fleet.
 - Exercise encrypted writes through an explicit test-only bypass of the
   production encryption guard, and separately verify that the production API
   returns `NotSupported` when encryption is off.
-- Verify that encrypted writes reject unaligned ranges, never erase
-  implicitly, and operate on previously erased ranges at the alignment the
-  chosen contract promises.
-- On ESP32, exercise a 16-byte-aligned but not 32-byte-aligned encrypted write
-  at both the start and the end of a range, which is the case that needs the
-  pre/post decrypted read-back.
+- Verify that encrypted writes reject ranges not aligned to 16 bytes, never erase
+  implicitly, and operate on previously erased 16-byte-aligned ranges on every
+  chip.
+- On ESP32, exercise a 16-byte-aligned but not 32-byte-aligned encrypted write at
+  both the start and the end of a range, and confirm the neighbouring 16-byte
+  block is unchanged afterwards. That is the pre/post read-back path, and
+  corrupting the neighbour is its failure mode.
 - Record that a true encrypted round trip still needs a board with encryption
   eFuses set.
 - Build the bootloader and examples through the new API.
 - Run bootloader host tests through the mock abstraction.
 - Update the semver baseline before stabilization.
 
-Decisions that must be closed before the gates above are meaningful:
-
-- the encrypted-write alignment contract, uniform 16 bytes or per-chip
-  ([B5](#b5-esp-idfs-encrypted-write-row-handling));
-- the direct-path chunk limit, once PR A has throughput numbers
-  ([Chunk size](#chunk-size));
-- the embedded-storage version question
-  ([A9](#a9-embedded-storage-trait-stabilization-deferred)).
+The design questions that were open during review are now closed: the
+encrypted-write alignment contract is a uniform 16 bytes
+([A19](#a19-encrypted-writes-match-esp-idf)), the direct chunk limits follow
+ESP-IDF's ceilings ([Chunk size](#chunk-size)), and the embedded-storage
+implementations stay unstable
+([A9](#a9-embedded-storage-trait-implementations-stay-unstable)). What remains is
+measurement, not choice.
 
 ## Appendix A: Decision log
 
@@ -880,11 +906,29 @@ including the ESP32-S2 symbol gap, live in
 The external backend left this driver. Its ownership and bus-sharing questions
 are reopened in `FLASH-DEFERRED.md`.
 
-### A9: embedded-storage trait stabilization deferred
+### A9: embedded-storage trait implementations stay unstable
 
-Trait implementations start unstable. The stabilization change must choose
-between the versioned 0.3 dependency and waiting for 1.0. Either choice remains
-additive.
+The trait implementations stay unstable, including through PR F, and become
+stabilization candidates when embedded-storage reaches 1.0.
+
+This is not really a flash decision; esp-hal already has a rule and it is
+consistent. `embedded-hal` and `embedded-hal-async` at 1.0 are unconditional,
+plain-named dependencies whose implementations are part of the stable surface.
+Every pre-1.0 ecosystem trait crate is version-suffixed, optional and gated behind
+`unstable`: `embedded-io` 0.6 and 0.7, `rand_core` 0.6, 0.9 and 0.10,
+`embedded-can`, `nb`. Nothing pre-1.0 has ever been stabilized. Stabilizing the
+0.3 implementations would make flash the exception and set a workspace precedent
+on the back of one driver.
+
+The version-suffixed dependency name keeps that additive: esp-hal already ships
+two `embedded-io` majors side by side, so a later 1.0 implementation can land
+without disturbing the 0.3 one.
+
+The consequence is that PR F stabilizes only the inherent methods, and the
+bootloader stays an `unstable` consumer because of the encrypted API anyway. An
+earlier revision of the plan claimed most of the practical de-unstabling value sat
+in this decision; on this reading it does not, so PR F is worth doing for the
+inherent surface or not at all.
 
 ### A10: `ll` remains private
 
@@ -982,22 +1026,20 @@ internal-RAM buffer. PSRAM-backed stacks remain unsupported.
 `write_encrypted` programs previously erased flash and never erases implicitly.
 A separate sector-overwrite helper remains deferred.
 
-The alignment contract is **not yet settled**, and PR C owns the choice. The
-mechanism is in [Row size](#row-size) and the ESP-IDF implementation in
+**Decision: match ESP-IDF.** The contract is 16-byte alignment on every chip, and
+ESP32 implements the pre/post decrypted read-back to satisfy its 32-byte ROM row.
+The rejected alternative was a per-chip alignment constant, 32 on ESP32 and 16
+elsewhere; it avoids the hidden read-back but stops the contract being uniform and
+pushes a `cfg` onto every caller. The bootloader's OTA path is the dominant
+consumer and that constant would have leaked into it.
+
+The mechanism is in [Row size](#row-size), the ESP-IDF implementation in
 [B5](#b5-esp-idfs-encrypted-write-row-handling).
 
-- **Match ESP-IDF.** 16-byte alignment everywhere, implementing the pre/post
-  decrypted read-back on ESP32. Portable code then behaves identically on every
-  chip. The cost is a bounded row-local read-modify-write on ESP32, which only
-  round-trips correctly when encryption is actually enabled.
-- **Expose the hardware.** A per-chip alignment constant, 32 on ESP32 and 16
-  elsewhere. No hidden read-modify-write, but the contract stops being uniform and
-  callers need a `cfg`.
-
-Matching ESP-IDF is the recommendation, because the bootloader's OTA path is the
-dominant consumer and a per-chip constant would leak into it. Choosing it also
-narrows the "no read-modify-write" rule to what it is really protecting: no
-implicit erase, and no change to bytes outside the requested range.
+This narrows the "no read-modify-write" rule to what it is really protecting: no
+implicit erase, and no change to bytes outside the requested range. The ESP32
+read-back satisfies both, since it rewrites the neighbouring block with exactly
+the bytes it read.
 
 ## Appendix B: ROM capability evidence
 
