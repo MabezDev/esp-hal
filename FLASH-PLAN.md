@@ -23,6 +23,12 @@ Note what that means for PR F's value: the trait impls cannot stabilize before e
 
 Changelog and migration-guide entries for every PR go in the **PR description** (structured sections), not `CHANGELOG.md` (per CONTRIBUTING.md).
 
+Three migration notes are easy to forget because nothing in the code will remind us, so they are listed here once and referenced from the PRs that own them:
+
+1. **`AutoPark` now stalls the other core for reads too.** `esp-storage` guards only writes and erases (`common.rs` hooks), so any dual-core consumer doing large reads sees new stalls. Frame it as a fix, not a tax: Espressif documents the cache-disable requirement as covering reads, so the old behaviour was under-guarded (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark), evidence [B7](FLASH-DESIGN.md#b7-espressifs-documented-spi1-concurrency-constraint)). Owner: PR A.
+2. **Migration is per binary, not per call site.** Both drivers consume `peripherals.FLASH`, so a binary holds one or the other and any dependency still using `esp-storage` blocks the switch (design [Migration is per binary](FLASH-DESIGN.md#migration-is-per-binary-not-incremental)). Owner: PR E, restated by D2.
+3. **`READ_SIZE` drops from 4 to 1.** Compatible for callers, but it changes what generic storage layers see (design [embedded-storage traits](FLASH-DESIGN.md#embedded-storage-traits)). Owner: PR B.
+
 ### PR A — Driver core (size: L)
 
 The stable surface, landed unstable via `unstable_driver!`.
@@ -125,7 +131,7 @@ The full verification inventory for the effort; individual PRs run the subset th
 10. HIL: `flash.rs` on ESP32 built at opt-level 0 — confirms dropping the esp-storage opt-level requirement (design [A2](FLASH-DESIGN.md#a2-esp32-opt-level-requirement-dropped); first run in PR A)
 11. HIL: OTA slot-switch round-trip — verifies the `otadata` update (explicit erase + write, guarding against sub-sector corruption/bricking after dropping the `Storage` RMW family)
 12. qa-test: `multicore_flash` on S3
-13. HIL: dual-core read guard — core 1 in an XIP hot loop while core 0 hammers `read`; verify `AutoPark` stops cache-dependent execution for each ROM call and restores core 1 afterward (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark); first run in PR A)
+13. HIL: dual-core read guard — core 1 in an XIP hot loop while core 0 hammers `read`; verify `AutoPark` stops cache-dependent execution for each ROM call and restores core 1 afterward (design [A4](FLASH-DESIGN.md#a4-multi-core-stable-default-is-autopark); first run in PR A). **This is new coverage, not a port**: `qa-test/src/bin/multicore_flash.rs` drives cache pressure against `write_nor` only, never a concurrent flash read, and excludes ESP32 and P4 with a "TODO: Make esp32 work". Include ESP32 if at all possible, since it is the least proven target here.
 14. HIL: capacity decoded from the cached ID equals the known board capacity on every family; the ROM refresh via `esp_rom_spi_flash_update_id` links and returns the expected ID on the 9 targets that export it; on ESP32 the cached ID is correct under the ESP-IDF bootloader; a sentinel, the ROM W25Q16 default, or an unsupported density returns `Err(ConfigError::UnknownFlashChip)` (design [B2](FLASH-DESIGN.md#b2-the-cached-jedec-id-and-its-provenance); first run in PR A)
 15. HIL: read/write throughput **and worst-case interrupt latency** versus `esp-storage` on one RISC-V and one Xtensa target. The direct chunk limits are ESP-IDF's 8192/16384, two to four times `esp-storage`'s sector, so latency is where that trade shows and throughput alone cannot reveal it (design [Chunk size](FLASH-DESIGN.md#chunk-size); first run in PR A)
 
@@ -159,6 +165,7 @@ Checklist items not repeated here: fmt-packages (#5) runs in every PR's CI, and 
 | Dedicated whole-chip erase | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §7 | a concrete RAM-resident flasher or recovery consumer |
 | Async internal flash access | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §8 | a consumer that benefits from between-chunk yielding |
 | Configurable bounce storage | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §9 | measurements or a consumer that needs a different RAM/ROM-call trade-off |
+| Relaxing the cache/park guard via flash auto-suspend | [FLASH-DEFERRED.md](FLASH-DEFERRED.md) §10 | PR A latency numbers showing the guard is a real problem, plus a metadata home for chip and flash-part suspend capability |
 
 ## File inventory (across all PRs)
 

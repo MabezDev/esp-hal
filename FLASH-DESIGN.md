@@ -651,11 +651,17 @@ for reads as well. A future cooperative strategy may wait for the other core to
 reach a safe point, but it is not part of this design. See
 [A4](#a4-multi-core-stable-default-is-autopark).
 
-Reads cannot rely on SPI1/cache arbitration while calling the low-level ROM
-primitive. ESP-IDF wraps reads in the same cache and other-core guard as writes
-and erases. Stabilization needs a dual-core hardware test that confirms
-`AutoPark` prevents XIP execution on the other core during each read chunk and
-restores it afterward.
+Reads cannot rely on SPI0/SPI1 arbitration while calling the low-level ROM
+primitive. Espressif documents that the caches must be disabled for reads as well
+as writes and erases, and that no CPU may be executing from flash while they are
+([B7](#b7-espressifs-documented-spi1-concurrency-constraint)); arbitration is only
+promised under the opt-in auto-suspend feature. ESP-IDF wraps reads in the same
+guard accordingly.
+
+Stabilization needs a dual-core hardware test that confirms `AutoPark` prevents
+XIP execution on the other core during each read chunk and restores it afterward.
+This is new coverage rather than a port: the existing `multicore_flash` qa-test
+exercises writes only.
 
 No watchdog is fed inside a ROM call. A future callback at chunk boundaries
 could support watchdog feeding or progress reports, but that API is not
@@ -779,6 +785,21 @@ emulation backend. The bootloader host tests must therefore depend on an interna
 flash abstraction and a test mock rather than on `Flash` itself, and the hardware
 migration happens only after that seam is in place.
 
+### Migration is per binary, not incremental
+
+Both drivers consume the same peripheral singleton. `esp-storage` re-exports it as
+`esp_storage::Flash` (`common.rs:6`) and `FlashStorage::new` takes it by value
+(`common.rs:92`); `esp_hal::flash::Flash::new` takes the same `FLASH<'d>`. A binary
+can therefore hold one or the other, never both.
+
+That is intended rather than an obstacle: it is the mechanism that stops two
+drivers racing on one flash chip, and it falls out of the singleton model for free.
+The consequence for users is that a crate cannot be migrated a call site at a time.
+The switch is per binary, including any dependency that reaches for
+`esp-storage` itself, so the migration guide has to say so plainly. It is also why
+`esp-storage`'s HIL test and the new `flash.rs` test stay separate binaries rather
+than one.
+
 ### Retired surface
 
 The public `ll` module is not carried forward. Its known consumer,
@@ -877,9 +898,39 @@ command resolution moved out with the external driver.
 
 `Error` cannot be the stable default while strategy selection is unstable.
 `AutoPark` makes stable read, write, and erase usable, but must document the
-unconditional CPU stall around every low-level ROM operation. Reads use the
-same cache and other-core guard because ESP-IDF does not treat the ROM read
-primitive as safe alongside XIP cache activity.
+unconditional CPU stall around every low-level ROM operation.
+
+**Reads take the same guard, and this is a requirement rather than a preference.**
+Espressif documents the SPI0/SPI1 constraint as covering "any operations like
+read/write/erase", says the caches "must be disabled while reading/writing/erasing",
+and says that while they are disabled "all CPUs should always execute code and
+access data from internal RAM" ([B7](#b7-espressifs-documented-spi1-concurrency-constraint)).
+Hardware arbitration between the cache and SPI1 is only promised under
+`CONFIG_SPI_FLASH_AUTO_SUSPEND`, which is opt-in, chip-dependent and off by
+default. There is no default-configuration guarantee to lean on.
+
+`esp-storage` does not guard reads at all, so by that documented constraint its
+reads are a latent bug rather than a behavior worth preserving. It survives
+because the window is short and the collision is data-dependent, not because the
+hardware promises anything. The existing `qa-test/src/bin/multicore_flash.rs` does
+not contradict this: it drives cache pressure on one core against
+`write_nor` on the other and never tests a concurrent flash *read*, and it
+excludes ESP32 and P4 outright with a "TODO: Make esp32 work".
+
+That gives the migration note a real reason. Consumers doing large dual-core reads
+will see new stalls, and the honest framing is that the old behavior was
+under-guarded, not that the new driver is being pedantic.
+
+The cost is worth stating plainly, because it compounds with
+[Chunk size](#chunk-size): a 16384-byte read chunk now stalls the other core for
+the duration of a 16 KiB flash read, and reads are the commonest operation. If the
+PR A interrupt-latency numbers look bad, the read chunk limit is the dial to turn,
+not the guard.
+
+A principled way out exists and is deferred rather than dismissed: on chips and
+flash parts supporting program/erase suspend, the guard can be dropped the way
+ESP-IDF's auto-suspend does. See
+[`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#10-relax-the-guard-via-flash-auto-suspend).
 
 ### A5: `mmap` would be an inherent method
 
@@ -1281,6 +1332,45 @@ apply it at line 871 and writes at lines 1035-1045, with the stated purpose of
 bounding how long the system stays unavailable. These are the upper bounds a
 comparable driver is measured against.
 
+### B7: Espressif's documented SPI1 concurrency constraint
+
+`docs/en/api-reference/peripherals/spi_flash/spi_flash_concurrency.rst` in ESP-IDF
+v5.3.1 states the constraint directly, and it names reads:
+
+> The SPI0/1 bus is shared between the instruction & data cache (for firmware
+> execution) and the SPI1 peripheral [...] This kind of operations include calling
+> SPI Flash API or other drivers on SPI1 bus, **any operations like
+> read/write/erase** or other user defined SPI operations
+
+> On {IDF_TARGET_NAME}, these caches **must be disabled while reading**/writing/erasing.
+
+And for the multi-core consequence:
+
+> Under this condition, **all CPUs** should always execute code and access data
+> from internal RAM.
+
+`index.rst:246-251` describes the mechanism: the SDK uses `esp_ipc_call` to run
+`spi_flash_op_block_func` on the other CPU, which disables that CPU's cache and
+sets `s_flash_op_can_start`, before the calling CPU disables its own cache and
+proceeds.
+
+Concurrent cache access is permitted only where a named mechanism replaces the
+software guard:
+
+| Mechanism | Availability |
+|-----------|--------------|
+| `CONFIG_SPI_FLASH_AUTO_SUSPEND` | needs `SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND` and a flash chip supporting program/erase suspend; disabled by default |
+| `CONFIG_SPIRAM_XIP_FROM_PSRAM` | needs `SOC_SPIRAM_XIP_SUPPORTED`; disabled by default |
+| `CONFIG_APP_BUILD_TYPE_RAM` | whole application in RAM, so nothing executes from flash |
+
+Only under auto-suspend does the documentation say "the hardware will handle the
+arbitration between them". That is the sole basis on which SPI0/SPI1 hardware
+arbitration may be relied upon, and it is opt-in and chip-dependent. In the
+default configuration there is no such guarantee, for reads or anything else.
+
+This is the evidence behind [A4](#a4-multi-core-stable-default-is-autopark), and
+it is stronger than an inference from ESP-IDF's lock structure: Espressif
+documents the requirement rather than merely implementing it.
 ## Appendix C: `esp-storage` internals evidence
 
 ### C1: ROM call sites

@@ -381,3 +381,41 @@ placement as part of the stable read or write contract.
 Add configurability only after measurements show that staged transfers are a
 bottleneck for a real consumer. The PR A throughput comparison is the first
 place that would show up.
+
+## 10. Relax the guard via flash auto-suspend
+
+The committed driver suspends the cache and parks the other core around every ROM
+operation, reads included, because Espressif documents that as required
+([design B7](FLASH-DESIGN.md#b7-espressifs-documented-spi1-concurrency-constraint)).
+That guard is the per-chunk cost and it is what makes dual-core reads disruptive.
+
+There is one sanctioned way to drop it. ESP-IDF's `CONFIG_SPI_FLASH_AUTO_SUSPEND`
+lets the cache read flash concurrently with SPI1 operations, and its documentation
+is explicit that under that option "the hardware will handle the arbitration
+between them". It needs both `SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND` on the chip and a
+flash part that supports program/erase suspend, which is why ESP-IDF leaves it off
+by default.
+
+A driver-side version would need:
+
+- a chip-capability check, from metadata rather than a `cfg` guess;
+- runtime detection that the attached flash part supports suspend, which is
+  vendor-specific and is exactly the kind of chip knowledge
+  [design A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch) currently
+  keeps out of the driver;
+- a decision about what the guard degrades to, since the flash lock and the
+  interrupt disable may still be wanted even when the cache can stay live;
+- its own dual-core test, because the failure mode is silent corruption rather
+  than a hang.
+
+`CONFIG_SPIRAM_XIP_FROM_PSRAM` is the same shape of escape on chips with
+`SOC_SPIRAM_XIP_SUPPORTED`: if code and rodata execute from PSRAM, nothing is
+fetching from flash and the guard is unnecessary. That one needs no flash chip
+knowledge, only a way to know the application is configured that way.
+
+### Activation condition
+
+Design this only if the PR A interrupt-latency numbers show the guard is a real
+problem for a real consumer, and only after the chip and flash-part capability
+questions have a home in metadata. Turning down the read chunk limit is the
+cheaper first response.
