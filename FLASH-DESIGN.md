@@ -156,7 +156,7 @@ The driver identifies the chip from the 24-bit JEDEC ID held in the ROM's flash
 chip structure. `new()` performs, in order:
 
 1. refresh the cache by calling the ROM's `esp_rom_spi_flash_update_id`, on the
-   nine targets that export it;
+   ten targets that export it;
 2. read `device_id` through a uniform `esp-rom-sys` accessor;
 3. reject the no-response sentinels `0x000000`, `0xFFFFFF` and `0xFFFF3F`, and
    the ROM's static default `0x001540EF`;
@@ -181,7 +181,7 @@ per-revision matrix are in
 [B2](#b2-the-cached-jedec-id-and-its-provenance).
 
 Refreshing through the ROM function rather than trusting the boot chain is what
-makes detection independent of the bootloader on those nine targets, and it stays
+makes detection independent of the bootloader on those ten targets, and it stays
 within [A1](#a1-no-spi1-register-exec-fallback)'s ROM-functions-only rule.
 
 **ESP32 requires an ESP-IDF-compatible second-stage bootloader.** Its ROM has no
@@ -546,7 +546,7 @@ bytes. Two consequences:
 
 The driver aligns the offset down rather than passing a byte address to ROM, even
 though at least one ROM implementation accepts one. That behavior is undocumented
-and not worth assuming uniform across ten targets.
+and not worth assuming uniform across eleven targets.
 
 ## Encrypted access
 
@@ -686,7 +686,7 @@ multiwrite implementation.
 
 `READ_SIZE` is 1 unconditionally, and this is portable to every target. The
 capability is not new: `esp-storage`'s *inherent* `read` already supports unaligned
-offsets and lengths on all ten chips with no feature flag and no chip gating, so
+offsets and lengths on all eleven chips with no feature flag and no chip gating, so
 byte-granular reads are the shipped default and only the `NorFlash` constant
 disagrees with them. Its `bytewise-read` feature, which sets `READ_SIZE = 1`, has
 no chip gating either. The mechanism uses only the documented ROM contract, so it
@@ -770,8 +770,8 @@ migration happens only after that seam is in place.
 ### Migration is per binary, not incremental
 
 Both drivers consume the same peripheral singleton. `esp-storage` re-exports it as
-`esp_storage::Flash` (`common.rs:6`) and `FlashStorage::new` takes it by value
-(`common.rs:92`); `esp_hal::flash::Flash::new` takes the same `FLASH<'d>`. A binary
+`esp_storage::Flash` (`common.rs:4`) and `FlashStorage::new` takes it by value
+(`common.rs:115`); `esp_hal::flash::Flash::new` takes the same `FLASH<'d>`. A binary
 can therefore hold one or the other, never both.
 
 That is intended rather than an obstacle: it is the mechanism that stops two
@@ -798,7 +798,7 @@ because several of them pass trivially if written the obvious way.
 |------|----------------|
 | Decoded capacity equals each board's *known* capacity, every chip family, including octal boot modes | asserting only that decoding succeeded, which passes with the byte order reversed |
 | Sentinels, the ROM default `0x001540EF`, and unsupported densities return `ConfigError::UnknownFlashChip` | a plausible 2 MiB descriptor being accepted as real |
-| `esp_rom_spi_flash_update_id` links and returns the expected ID on all nine targets exporting it, including an octal mode that takes its dummy-length branch | the refresh silently not running |
+| `esp_rom_spi_flash_update_id` links and returns the expected ID on all ten targets exporting it, including an octal mode that takes its dummy-length branch | the refresh silently not running |
 | On ESP32, the cached ID is correct under the ESP-IDF bootloader | the documented requirement drifting untested |
 | The ESP32 bootloader requirement appears in the module `Limitations` block and on `new()` | an undocumented platform constraint |
 
@@ -853,8 +853,8 @@ driver calls ROM functions only. Unsupported future commands may return
 
 `esp-storage` reads `RDID` from SPI1 registers itself, so this rule looks like it
 costs a capability. It does not: the ROM's own `esp_rom_spi_flash_update_id`
-provides the same bootloader independence through a ROM function on nine of the
-ten targets, and ESP32 is covered by the documented bootloader requirement in
+provides the same bootloader independence through a ROM function on ten of the
+eleven targets, and ESP32 is covered by the documented bootloader requirement in
 [A13](#a13-no-chip-configuration-at-launch).
 
 ### A2: ESP32 opt-level requirement dropped
@@ -971,7 +971,7 @@ start from a demonstrated chip and specify more than an assumed capacity when
 its behavior differs from the standard ROM operations.
 
 **Failure is an error, not a panic**, even though the first-stage ROM guarantees a
-valid cache on nine of the ten targets
+valid cache on ten of the eleven targets
 ([B2](#b2-the-cached-jedec-id-and-its-provenance)). Three reasons: the developer
 guidelines prefer a fallible API when a `Result` is already being returned; ESP32
 is not covered by that guarantee and leaves a real if narrow failure path; and the
@@ -1161,6 +1161,7 @@ the symbol, and every address matches the ROM ELF:
 | ESP32-C6 | rev0 | `esp32c6.rom.ld:133` = `0x40000174` | `0x40024b36` | `ets_run_flash_bootloader` |
 | ESP32-C5 | rev0, rev100 | `esp32c5.rom.ld:144` = `0x40000184` | `0x40027c1c`, `0x400296f0` | `ets_run_flash_bootloader` |
 | ESP32-C61 | rev100 | `esp32c61.rom.ld:138` = `0x40000184` | `0x40027ecc` | `ets_run_flash_bootloader` |
+| ESP32-S31 | rev0 | `esp32s31.rom.ld:165` = `0x2f800194` | `0x2f80ec54` | `ets_run_flash_bootloader` |
 | ESP32-H2 | rev0 | `esp32h2.rom.ld:124` = `0x4000016c` | `0x4000d626` | `ets_run_flash_bootloader` |
 | ESP32-P4 | rev0, rev300 | `esp32p4.rom.ld:135` = `0x4fc0017c` | `0x4fc0f000`, `0x4fc0fc46` | `ets_run_flash_bootloader` |
 | ESP32 | rev0, rev300 | **absent** | **absent** | n/a |
@@ -1257,7 +1258,7 @@ bits 12:8 in both orders. esptool also treats `0xFFFF3F` as a no-response value
 **Accessor shape.** The declaration is direct on ESP32 and ESP32-S2:
 `esp32.rom.ld:93` provides `g_rom_flashchip` and
 `esp32s2.rom.spiflash_legacy.ld:12` aliases it to `SPI_flashchip_data`. The
-other eight targets provide `rom_spiflash_legacy_data`, which is a **pointer**
+other nine targets provide `rom_spiflash_legacy_data`, which is a **pointer**
 to the legacy data structure; ESP-IDF accesses
 `rom_spiflash_legacy_data->chip.device_id`
 (for example `bootloader_flash_config_esp32c6.c:109`). The accessor therefore
@@ -1275,7 +1276,7 @@ the result. `esp_flash_read_chip_id()` in
 `g_rom_flashchip.device_id`.
 
 `esp_rom_spiflash_read_user_cmd(status: *mut u32, cmd: u8)` is provided on all
-ten targets (`esp32.rom.ld:1371`, `esp32s2.rom.spiflash_legacy.ld:18`,
+eleven targets (`esp32.rom.ld:1371`, `esp32s2.rom.spiflash_legacy.ld:18`,
 `esp32s3.rom.ld:163`, and the corresponding lines in the RISC-V scripts), but it
 returns only one response byte, so it can read a status-like byte and not the
 three-byte JEDEC ID. This is now confirmed rather than assumed: the ESP32
@@ -1285,7 +1286,7 @@ to `SPI_MISO_DLEN`, which is 8 bits.
 So the cache remains the right source for an internal-only driver: it identifies
 the chip that supplied the running image, it is the value ESP-IDF itself falls
 back to in octal mode, and it avoids depending on an application-initialized MSPI
-host context. Better still, on nine targets the driver can refresh it through
+host context. Better still, on ten targets the driver can refresh it through
 `esp_rom_spi_flash_update_id` rather than trusting whoever booted us, which is
 strictly stronger than `esp-storage`'s hand-rolled register read and stays within
 the ROM-functions-only rule. ESP32 keeps the bootloader dependency, which is why
@@ -1430,11 +1431,11 @@ register access is RDID in `hardware.rs:70-73`.
 
 `maybe_with_critical_section` wraps each ROM call
 (`hardware.rs:8-41`). Erase splits by sector or block
-(`nor_flash.rs:157-186`).
+(`nor_flash.rs:206-235`).
 
 Reads and writes split by **sector**, never by page: `write_nor` steps by
-`SECTOR_SIZE` on both the aligned and the staged path (`nor_flash.rs:131-152`), and
-`storage.rs:16-33` and `:57-70` do the same for `read` and `write`. So
+`SECTOR_SIZE` on both the aligned and the staged path (`nor_flash.rs:159-204`), and
+`storage.rs:18-47` and `:72-97` do the same for `read` and `write`. So
 `esp-storage`'s per-ROM-call payload is 4096 bytes, and the ROM splits a write into
 256-byte pages internally. Note the distinction: a description of "sector or page"
 would make a 256-byte driver chunk look like parity when it is a sixteenfold
@@ -1446,14 +1447,14 @@ per-operation guard.
 
 ### C3: Locking and multicore
 
-The critical section uses `esp_sync::RawMutex` (`lib.rs:48-58`). On multi-core
+The critical section uses `esp_sync::RawMutex` (`lib.rs:66-72`). On multi-core
 chips this is a cross-core spinlock plus local interrupt disable. It does not
 stop the other core from executing from flash.
 
-`MultiCoreStrategy` is in `common.rs:229-258`. Its hooks guard write and erase,
+`MultiCoreStrategy` is in `common.rs:232-248`. Its hooks guard write and erase,
 not read. `AutoPark` uses `CpuControl::park_core`, which applies the RTC
 hardware stall. `esp-storage` parks before taking the flash lock
-(`common.rs:282-289`); the new driver reverses that order.
+(`common.rs:274-299`); the new driver reverses that order.
 
 ### C4: Encrypted access and MMU
 
@@ -1461,7 +1462,7 @@ The local `esp_rom_spiflash_write_encrypted` declaration requires 32-byte
 address and length alignment (`ll.rs:78-80`,
 `esp-rom-sys/src/rom/spiflash.rs:36-38`).
 
-`esp-storage/src/encrypted.rs:44-79` wraps it in a 4096-byte sector
+`esp-storage/src/encrypted.rs:66-101` wraps it in a 4096-byte sector
 read-modify-write. That wrapper behavior is not carried into the new driver.
 
 ESP-IDF's public `esp_flash_write_encrypted` contract requires erased flash and
@@ -1469,8 +1470,8 @@ ESP-IDF's public `esp_flash_write_encrypted` contract requires erased flash and
 partitions to it without adding read-modify-write.
 
 The operation returns `NotSupported` when encryption is off. Temporary
-decrypted mappings are in `mmu.rs:66-134`. P4 invalidates L1 data cache and L2
-in `mmu.rs:168-179`.
+decrypted mappings are in `mmu.rs:69-135`. P4 invalidates L1 data cache and L2
+in `mmu.rs:181-196`.
 
 The existing HIL test at `hil-test/src/bin/storage.rs:43-88` runs with
 encryption disabled. A test-only cfg bypasses the production guard so the ROM
@@ -1491,22 +1492,22 @@ Other chips use RDID and an esptool-derived table
 ### C6: Buffers and `READ_SIZE`
 
 Aligned buffers go directly to ROM without a residency check
-(`common.rs:173-192`, `nor_flash.rs:129-137`). Unaligned and read-modify-write
+(`common.rs:186-205`, `nor_flash.rs:25-28`). Unaligned and read-modify-write
 paths use 4-byte and 4096-byte stack buffers (`buffer.rs:12-14`,
-`storage.rs:55`). `esp-storage` implements `MultiwriteNorFlash`
-(`nor_flash.rs:242`).
+`storage.rs:79`). `esp-storage` implements `MultiwriteNorFlash`
+(`nor_flash.rs:287`).
 
 **Byte-granular reads are already portable.** Evidence that `READ_SIZE = 1` is
 achievable on every target, strongest first:
 
 | Evidence | Where |
 |----------|-------|
-| The inherent `read` documents "Unaligned offsets and lengths are supported" and has no `cfg` and no feature gate, so this is shipped default behavior on all ten chips | `storage.rs:4-10` |
+| The inherent `read` documents "Unaligned offsets and lengths are supported" and has no `cfg` and no feature gate, so this is shipped default behavior on all eleven chips | `storage.rs:4-12` |
 | `bytewise-read`, which sets `READ_SIZE = 1`, has no chip gating anywhere in the crate | `nor_flash.rs`, `buffer.rs` |
 | It is built and linted across every target in CI | `Cargo.toml` `check-configs`, `clippy-configs` |
-| The emulation uses only the documented ROM contract: align the offset down, round the length up, stage through a word-aligned buffer | `nor_flash.rs:38-56` |
+| The emulation uses only the documented ROM contract: align the offset down, round the length up, stage through a word-aligned buffer | `nor_flash.rs:66-90` |
 
-`bytewise-read` is nevertheless off by default (`Cargo.toml:59-65`), so default
+`bytewise-read` is nevertheless off by default (`Cargo.toml:61`, `:67`), so default
 `esp-storage` reports `READ_SIZE = 4` (`nor_flash.rs:10-16`). No rationale is
 recorded: the feature predates the crate's import into this repository, so the
 reason is not in this history. The extra ROM call for a head or tail word is the

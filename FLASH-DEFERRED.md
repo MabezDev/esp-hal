@@ -64,9 +64,11 @@ geometry, commands, status bits and timeouts come from a chip description.
 commands. It proves the esp-hal transaction shape and hardware path. Its fixed
 waits are test shortcuts, not a design to copy.
 
-The test still excludes P4, but that filter does not prove a driver limit. P4
-metadata assigns SPI2/SPI3 to AXI-GDMA, and the SPI master supports that
-engine. P4 needs qualification when this test or driver is implemented.
+The test's chip filter is `spi_master_supports_dma`, which now includes P4; an
+earlier `!esp32p4` exclusion has been dropped. So the P4 qualification question
+this section used to carry is answered for the transaction shape, and P4 metadata
+assigns SPI2/SPI3 to AXI-GDMA with the SPI master supporting that engine. A driver
+would still need its own P4 validation.
 
 ### Activation condition
 
@@ -145,7 +147,7 @@ Each configured operation would choose one of three paths:
 |-----------------|-----------|
 | Standard command, including capacity-only override | dedicated `esp_rom_spiflash_*` function on every supported chip |
 | Command with a one-byte response, such as status | `esp_rom_spiflash_read_user_cmd` on every supported chip |
-| Any other custom command, including three-byte JEDEC ID, command-only, address, dummy, write-data, or custom geometry shapes | `spi_flash_hal_common_command` on S3/C2/C3/C5/C6/C61/H2; `NotSupported` on ESP32/S2/P4 |
+| Any other custom command, including three-byte JEDEC ID, command-only, address, dummy, write-data, or custom geometry shapes | `spi_flash_hal_common_command` on S3/S31/C2/C3/C5/C6/C61/H2; `NotSupported` on ESP32/S2/P4 |
 
 Capability errors occur when an operation is used. The driver does not reject
 an entire configuration because an unused operation is unsupported.
@@ -165,13 +167,13 @@ is defined in IDF's `components/hal/spi_flash_hal_common.inc`. It supports:
 - write data;
 - read data.
 
-The symbol exists on S3/C2/C3/C5/C6/C61/H2 in the `esp-rom-sys/ld/` files. It
-is absent on ESP32/S2/P4.
+The symbol exists on S3/S31/C2/C3/C5/C6/C61/H2 in the `esp-rom-sys/ld/` files, so
+eight of the eleven targets. It is absent on ESP32/S2/P4.
 
 There is a second, older ROM entry point that the target set above misses. The
 linker scripts also provide `SPI_Common_Command`, aliased as
-`esp_rom_spiflash_common_cmd` in each `*.rom.api.ld`, on **nine** targets:
-S2 (`esp32s2.rom.ld:605`), S3 (`:210`), C2, C3, C5, C61, C6, H2 and P4
+`esp_rom_spiflash_common_cmd` in each `*.rom.api.ld`, on **ten** targets:
+S2 (`esp32s2.rom.ld:605`), S3 (`:210`), S31, C2, C3, C5, C61, C6, H2 and P4
 (`esp32p4.rom.ld:148`). Only ESP32 lacks it, and even there the function is
 present in the ROM at `0x4006246c` on both rev0 and rev300; it is simply not
 exported by `esp-rom-sys/ld/esp32/`.

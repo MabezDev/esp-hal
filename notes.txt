@@ -124,12 +124,12 @@ Tools: `llvm-objdump` for RISC-V; xtensa-esp32-elf-objdump for Xtensa
 (llvm-objdump silently produces NOTHING for Xtensa - that caused a false
 "NONE-FOUND" on S2/S3 on my first pass).
 
-FINDING: the first-stage ROM bootloader DOES detect the flash ID on 9 of 10
-chips. `ets_run_flash_bootloader` calls the ROM's own
+FINDING: the first-stage ROM bootloader DOES detect the flash ID on 10 of 11
+chips (ESP32-S31 was added upstream on 4 Aug; it fits the pattern). `ets_run_flash_bootloader` calls the ROM's own
 `esp_rom_spi_flash_update_id`. ESP32 is the sole exception (rev0 and rev300). The
 second-stage bootloader repeats the work defensively.
 
-Verified matrix (all revisions in release 20260528, 17 ELFs):
+Verified matrix (all revisions in release 20260528, 17 ELFs, all 11 chips):
 
   chip       revisions checked     ld symbol    impl                     caller
   ---------- -------------------- ------------ ------------------------ ------------------------
@@ -141,6 +141,7 @@ Verified matrix (all revisions in release 20260528, 17 ELFs):
   esp32c3    rev0, rev101, rev3   0x4000014c   0x4004d260/0x4004f5ee/0x4004db12  ditto
   esp32c5    rev0, rev100         0x40000184   0x40027c1c/0x400296f0    ditto
   esp32c61   rev100               0x40000184   0x40027ecc               ditto
+  esp32s31   rev0                 0x2f800194   0x2f80ec54               ditto
   esp32c6    rev0                 0x40000174   0x40024b36               ditto
   esp32h2    rev0                 0x4000016c   0x4000d626               ditto
   esp32p4    rev0, rev300         0x4fc0017c   0x4fc0f000/0x4fc0fc46    ditto
@@ -383,3 +384,48 @@ latency versus esp-storage (the latter matters because D1 chose ESP-IDF's larger
 ceilings), asserting decoded capacity against a real board, confirming the ROM
 refresh call at runtime, and the dual-core read guard. The encrypted-write
 row-edge cases need an ESP32, not a C6.
+
+
+7. POST-REBASE RECONCILIATION (4 Aug, onto upstream/main ad422eb2a)
+-------------------------------------------------------------------
+
+Rebased 13 flash commits onto upstream/main, absorbing 94 upstream commits. Clean,
+no conflicts (our commits only touch the FLASH-*.md files and this one).
+Pre-rebase HEAD preserved on branch `flash-driver-design-prerebase-8cc4a08`
+(8cc4a0845) - delete once satisfied.
+
+THREE REAL CLAIM CHANGES, all fixed in the docs:
+
+  1. ESP32-S31 added to esp-metadata (11 devices now, was 10). RISC-V, dual-core,
+     has FLASH virtual. It has esp_rom_spi_flash_update_id at ld 0x2f800194 /
+     impl 0x2f80ec54, called from ets_run_flash_bootloader, and the W25Q16 static
+     default - so it joins the ROM-detects group. ESP32 remains the SOLE
+     exception, now 10 of 11 rather than 9 of 10. Also affects: read_user_cmd (all
+     11), SPI_Common_Command (10), spi_flash_hal_common_command (8, still absent
+     on ESP32/S2/P4), erase_chip (10, still absent on S2),
+     rom_spiflash_legacy_data pointer (9, direct on ESP32/S2 only), soc.toml count.
+  2. xtask host-tests ALREADY enables embedded-storage upstream
+     (features ["std", "embedded-storage"]). The plan's D1 "first, fix the gate
+     itself" is done; nothing to do but keep it enabled.
+  3. qa-test/src/bin/qspi_flash.rs CHIP_FILTER dropped its !esp32p4 exclusion, so
+     it is now `spi_master_supports_dma` alone. Deferred sec 1's "the test still
+     excludes P4" was stale; P4 is qualified for the transaction shape.
+
+ONE NUANCE: esp-storage's default multi-core strategy is now
+cfg_select!(multi_core => Error, _ => Ignore) at common.rs:119, not a plain
+Error. Substantively unchanged for our purposes, since only the multi_core case
+matters, but the citation moved.
+
+CLAIMS RE-VERIFIED AS STILL TRUE after 94 upstream commits: esp-storage still
+does not guard reads (no pre_write in internal_read); bytewise-read still off by
+default; the inherent read still documents unaligned support; write_nor still
+chunks by SECTOR_SIZE; embedded-storage still absent from esp-hal and every
+pre-1.0 trait crate still behind `unstable` (so the stabilization reasoning
+holds); no `flash` driver id in esp-metadata yet; FLASH still `virtual = true`;
+multicore_flash still write-only and still excludes esp32 + esp32p4;
+NorFlashRegion/EncryptedNorFlashRegion and as_flash_region all still present.
+
+17 file:line citations had drifted and were re-resolved. A scripted verifier
+covering 39 citations now reports zero stale. Worth re-running that after any
+future rebase - line numbers drift constantly, which is why the design's Sources
+note says the surrounding identifiers are the durable part.
