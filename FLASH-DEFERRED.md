@@ -22,32 +22,25 @@ The rest of this section remains open.
 
 ### Two possible bus designs
 
-A portable driver could accept an embedded-hal `SpiDevice`. That supports bus
-sharing and could live outside esp-hal. It does not expose esp-hal's dedicated
-half-duplex command, address, dummy-cycle, DMA, or wider-I/O controls.
-`embedded-hal-bus` can provide shared-bus `SpiDevice` implementations, but it
-does not define the trait itself.
-
-An esp-hal-specific driver could accept the esp-hal SPI type. It can use the
-native half-duplex phases, hardware chip select, DMA, and Dual or Quad I/O.
-That path needs an explicit bus-ownership and sharing design.
-
 These are different drivers or front ends, not interchangeable constructor
-choices.
+choices:
+
+| | Portable, embedded-hal `SpiDevice` | esp-hal-specific SPI type |
+|-|-----------------------------------|---------------------------|
+| Bus sharing | yes, and `embedded-hal-bus` supplies shared-bus implementations, though it does not define the trait | needs an explicit bus-ownership design |
+| Home | could live outside esp-hal | inside esp-hal |
+| Half-duplex command, address, dummy cycles | not exposed | native |
+| Hardware chip select | no | yes |
+| DMA | cannot assume | yes, and owns DMA errors |
+| Dual and Quad I/O | no | yes |
+| Errors owned | SPI | SPI and DMA |
+| Async | blocking or embedded-hal async transactions | interrupt-driven DMA completion with a bound handler, so `Async: !Send` has a real hardware reason |
 
 ### Behavior worth keeping
 
-Both bus designs lower each operation to a command transaction. Program and
-erase completion use status-register polling with a timeout, not a fixed
-delay. Chip geometry, commands, status bits, and timeouts come from a chip
-description.
-
-The portable path owns SPI errors and may use blocking or embedded-hal async
-transactions. It cannot assume DMA or dedicated wider-I/O phases.
-
-The esp-hal path owns SPI and DMA errors. Its async mode waits for
-interrupt-driven DMA completion and binds a handler, so `Async: !Send` has a
-real hardware reason. Dual and Quad I/O also belong to this path.
+Both designs lower each operation to a command transaction. Program and erase
+completion use status-register polling with a timeout, not a fixed delay. Chip
+geometry, commands, status bits and timeouts come from a chip description.
 
 ### Open choices
 
