@@ -7,6 +7,14 @@ behavior.
 Nothing here is planned work. Each section has an activation condition, and
 all evidence must be checked again before implementation.
 
+**On citations.** ESP-IDF paths without an explicit commit resolve against the same
+pinned tree the design document uses,
+[`c8fc5f64`](https://github.com/espressif/esp-idf/tree/c8fc5f643b7a7b0d3b182d3df610844e3dc9bd74)
+(v5.3.1); unqualified paths such as `esp-rom-sys/ld/...` are relative to this
+repository. Treat every citation here as a starting point rather than a verified
+claim: unlike the design document's appendices, this material was not
+systematically re-checked, which is what the paragraph above is warning about.
+
 ## 1. External SPI NOR flash driver
 
 ### Boundary
@@ -313,8 +321,9 @@ possible during the ROM call.
 
 The dedicated `esp_rom_spiflash_erase_chip` symbol exists on every target
 except ESP32-S2. ESP32-S2 instead exports `SPIEraseChip = 0x400170ec`
-(`esp32s2.rom.ld:612`) and omits the legacy alias. IDF release/v5.2 at
-`72d06017df` shows:
+(`esp32s2.rom.ld:612`) and omits the legacy alias. ESP-IDF at
+[`72d06017`](https://github.com/espressif/esp-idf/tree/72d06017dfdca4e2c7f66691a7e241cb0ba89f9e),
+on the `release/v5.2` line, shows:
 
 1. `esp32s2.rom.spiflash_legacy.ld` aliases the other legacy operations.
 2. IDF does not call the legacy chip-erase name.

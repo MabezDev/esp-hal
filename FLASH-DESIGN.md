@@ -1101,20 +1101,28 @@ to turn before the guard.
 
 ## Sources for appendices B and C
 
-Every claim below is traceable from public material. Unless a citation says
-otherwise:
+Every claim below is traceable from public material. Citations give a path and
+line range only; resolve them against the pinned tree here. Each source is pinned
+to a commit rather than a tag or branch, so the references cannot drift.
 
-| Source | Version | Notes |
-|--------|---------|-------|
-| ESP-IDF, including `docs/en/...` | v5.3.1 | `components/spi_flash/memspi_host_driver.c` is cited at v6.0.2 where marked |
-| ROM disassembly | `esp-rom-elfs` release `20260528`, from Espressif's `esp-rom-elfs` repository | 17 ELFs, covering every supported chip and every revision in that release |
-| esptool | commit `8363cae8` | |
-| Unqualified paths such as `esp-storage/src/...` | this repository | line numbers are as of writing and may drift |
+| Source | Pinned tree | Human-readable |
+|--------|-------------|----------------|
+| ESP-IDF | [`c8fc5f64`](https://github.com/espressif/esp-idf/tree/c8fc5f643b7a7b0d3b182d3df610844e3dc9bd74) | v5.3.1 |
+| ESP-IDF, for `components/spi_flash/memspi_host_driver.c` only | [`7101770d`](https://github.com/espressif/esp-idf/tree/7101770dc6db2667b3c477cc31365dd1acd6db4e) | v6.0.2 |
+| esptool | [`8363cae8`](https://github.com/espressif/esptool/tree/8363cae8eca42ec70e26edfe4d1727549d6ce578) | |
+| ROM ELFs | [`37b4a88f`](https://github.com/espressif/esp-rom-elfs/tree/37b4a88f50e151f1b9e0d6c5409471035ea0ea37) | `esp-rom-elfs` release `20260528` |
+
+The ROM ELF set covers every supported chip and every silicon revision in that
+release, 17 files in total.
+
+Unqualified paths such as `esp-storage/src/hardware.rs:8-41` are relative to this
+repository. Their line numbers are as of writing and will drift; the surrounding
+identifiers are the durable part.
 
 ROM ELFs were disassembled with `llvm-objdump` for the RISC-V targets and the
-Espressif toolchain's `xtensa-esp32-elf-objdump` for the Xtensa ones. `llvm-objdump`
-silently emits nothing for Xtensa, so an empty result there means the wrong tool,
-not an absent symbol.
+Espressif toolchain's `xtensa-esp32-elf-objdump` for the Xtensa ones.
+`llvm-objdump` silently emits nothing for Xtensa, so an empty result there means
+the wrong tool, not an absent symbol.
 
 ## Appendix B: ROM capability evidence
 
