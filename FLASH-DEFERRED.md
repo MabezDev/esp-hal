@@ -372,8 +372,8 @@ placement as part of the stable read or write contract.
 ### Activation condition
 
 Add configurability only after measurements show that staged transfers are a
-bottleneck for a real consumer. The PR A throughput comparison is the first
-place that would show up.
+bottleneck for a real consumer. The throughput comparison in the design's
+validation gates is the first place that would show up.
 
 ## 10. Relax the guard via flash auto-suspend
 
@@ -408,7 +408,7 @@ knowledge, only a way to know the application is configured that way.
 
 ### Activation condition
 
-Design this only if the PR A interrupt-latency numbers show the guard is a real
+Design this only if the interrupt-latency measurements show the guard is a real
 problem for a real consumer, and only after the chip and flash-part capability
 questions have a home in metadata. Turning down the read chunk limit is the
 cheaper first response.

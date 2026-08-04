@@ -24,8 +24,8 @@ flash mapping.
 
 Everything lands behind `unstable_driver!`, which compiles the module out
 entirely unless the `unstable` feature is on. Stabilization is therefore not a
-matter of removing attributes: PR F moves `flash` out of the `unstable_driver!`
-block into a plain `#[cfg(flash_driver_supported)] pub mod flash;`.
+matter of removing attributes: stabilization moves `flash` out of the
+`unstable_driver!` block into a plain `#[cfg(flash_driver_supported)] pub mod flash;`.
 
 The intended stable surface is:
 
@@ -51,7 +51,8 @@ deferred without removing the type-state parameter.
 Be clear about how much this stabilizes. The stable surface is direct calls to
 `read`, `write`, `erase` and `capacity`. Most real consumers reach for the
 embedded-storage traits or encrypted access instead, and both stay unstable, so
-`esp-bootloader-esp-idf` remains an `unstable` consumer after PR F regardless.
+`esp-bootloader-esp-idf` remains an `unstable` consumer after stabilization
+regardless.
 That is a consequence of workspace policy rather than of this driver; see
 [A9](#a9-embedded-storage-trait-implementations-stay-unstable).
 
@@ -457,7 +458,7 @@ on that path.** Methods that only touch driver state stay out of RAM.
 | `capacity` | no | returns the value detected during construction; `esp-storage`'s equivalent is a field read |
 | `chip_info` | no | reports stored identification and fixed geometry |
 | `apply_config` | no | software policy, no register or flash access |
-| `new` | no, but see below | |
+| `new` | no, with a caveat below | |
 
 `new()` is the awkward case. It does not touch flash *directly*, but detection
 refreshes the cached ID through a ROM function that issues a flash command. That
@@ -703,7 +704,8 @@ need a plain sub-sector update must perform the read-modify-write themselves.
 
 The dependency uses the version-suffixed name `embedded-storage-03`. It is
 optional and enabled by `unstable`; no new cargo feature is added. The
-implementations stay unstable, including through PR F, and the suffixed name keeps
+implementations stay unstable, including through stabilization, and the suffixed
+name keeps
 a later 1.0 implementation additive. See
 [A9](#a9-embedded-storage-trait-implementations-stay-unstable).
 
@@ -892,7 +894,7 @@ therefore present the new stalls as a fix rather than a tax.
 
 The cost compounds with [A21](#a21-direct-chunk-limits-follow-esp-idf): a
 16384-byte read chunk stalls the other core for a 16 KiB read, and reads are the
-commonest operation. If PR A's latency numbers disappoint, the read limit is the
+commonest operation. If the latency measurements disappoint, the read limit is the
 dial to turn, not the guard. Dropping the guard entirely requires flash
 auto-suspend, deferred in
 [`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#10-relax-the-guard-via-flash-auto-suspend).
@@ -924,8 +926,8 @@ are reopened in `FLASH-DEFERRED.md`.
 
 ### A9: embedded-storage trait implementations stay unstable
 
-The trait implementations stay unstable, including through PR F, and become
-stabilization candidates when embedded-storage reaches 1.0.
+The trait implementations stay unstable, and become stabilization candidates only
+when embedded-storage reaches 1.0.
 
 esp-hal already has a consistent rule for this. `embedded-hal` and `embedded-hal-async` at 1.0 are unconditional,
 plain-named dependencies whose implementations are part of the stable surface.
@@ -939,9 +941,9 @@ The version-suffixed dependency name keeps that additive: esp-hal already ships
 two `embedded-io` majors side by side, so a later 1.0 implementation can land
 without disturbing the 0.3 one.
 
-The consequence is that PR F stabilizes only the inherent methods, and the
-bootloader stays an `unstable` consumer because of the encrypted API anyway. PR F
-is therefore worth doing for the inherent surface or not at all.
+The consequence is that stabilization covers only the inherent methods, and the
+bootloader stays an `unstable` consumer because of the encrypted API anyway.
+Stabilization is therefore worth doing for the inherent surface or not at all.
 
 ### A10: `ll` remains private
 
@@ -1071,8 +1073,8 @@ the cache can be followed by a cache read returning pre-write data;
 XIP-mapped, and its own encrypted path already invalidates, so the inconsistency
 is internal to `esp-storage`.
 
-The guard is the per-chunk cost, so it is the first thing to examine if the PR A
-latency numbers disappoint. The sanctioned way to drop it is flash auto-suspend,
+The guard is the per-chunk cost, so it is the first thing to examine if the latency
+measurements disappoint. The sanctioned way to drop it is flash auto-suspend,
 deferred in
 [`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#10-relax-the-guard-via-flash-auto-suspend).
 
@@ -1091,11 +1093,28 @@ revisit buffer size without changing unrelated chunking.
 
 The cost is that the interrupts-disabled and cache-off window is two to four times
 `esp-storage`'s. That is the deliberate trade, fewer guard transitions for a longer
-worst-case window, and it is why PR A measures interrupt latency as well as
-throughput: throughput alone cannot show it. It compounds with
+worst-case window, and it is why the validation gates measure interrupt latency as
+well as throughput: throughput alone cannot show it. It compounds with
 [A4](#a4-multi-core-stable-default-is-autopark), since a read chunk also stalls the
 other core for its duration. If the numbers disappoint, the read limit is the dial
 to turn before the guard.
+
+## Sources for appendices B and C
+
+Every claim below is traceable from public material. Unless a citation says
+otherwise:
+
+| Source | Version | Notes |
+|--------|---------|-------|
+| ESP-IDF, including `docs/en/...` | v5.3.1 | `components/spi_flash/memspi_host_driver.c` is cited at v6.0.2 where marked |
+| ROM disassembly | `esp-rom-elfs` release `20260528`, from Espressif's `esp-rom-elfs` repository | 17 ELFs, covering every supported chip and every revision in that release |
+| esptool | commit `8363cae8` | |
+| Unqualified paths such as `esp-storage/src/...` | this repository | line numbers are as of writing and may drift |
+
+ROM ELFs were disassembled with `llvm-objdump` for the RISC-V targets and the
+Espressif toolchain's `xtensa-esp32-elf-objdump` for the Xtensa ones. `llvm-objdump`
+silently emits nothing for Xtensa, so an empty result there means the wrong tool,
+not an absent symbol.
 
 ## Appendix B: ROM capability evidence
 
@@ -1108,11 +1127,6 @@ Whole-chip erase evidence is kept with that deferred API in
 `FLASH-DEFERRED.md`.
 
 ### B2: The cached JEDEC ID and its provenance
-
-Evidence below comes from the ROM ELFs in the `esp-rom-elfs` `20260528` release,
-disassembled with `llvm-objdump` for RISC-V and `xtensa-esp32-elf-objdump` for
-Xtensa. Every supported chip and every silicon revision in that release was
-checked.
 
 **The ROM's static default.** `.data_spi_flash` in all 17 ROM ELFs contains the
 byte pattern `ef401500 00002000 00000100 00100000 00010000 ffff0000`, which is
@@ -1267,8 +1281,8 @@ host context. Better still, on nine targets the driver can refresh it through
 `esp_rom_spi_flash_update_id` rather than trusting whoever booted us, which is
 strictly stronger than `esp-storage`'s hand-rolled register read and stays within
 the ROM-functions-only rule. ESP32 keeps the bootloader dependency, which is why
-detection stays fallible. PR A adds the uniform accessor and validates decoded
-capacity against known boards.
+detection stays fallible. The implementation adds the uniform accessor and
+validates decoded capacity against known boards.
 
 ### B3: ESP-IDF operation cleanup
 
