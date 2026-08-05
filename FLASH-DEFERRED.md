@@ -423,3 +423,53 @@ Design this only if the interrupt-latency measurements show the guard is a real
 problem for a real consumer, and only after the chip and flash-part capability
 questions have a home in metadata. Turning down the read chunk limit is the
 cheaper first response.
+
+## 11. Construction without auto-detection
+
+Detection is mandatory today: `Flash::new` decodes the cached JEDEC ID and returns
+`ConfigError::UnknownFlashChip` if it cannot
+([design A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)). A future
+additive constructor could skip detection and take the capacity from the caller.
+
+This is not the rejected fallback. A fallback substitutes a guess when detection
+fails, leaving the caller unaware that the capacity is fiction. An explicit
+constructor puts the value in the caller's hands, where a wrong number is the
+caller's error rather than the driver's.
+
+It has one concrete payoff: ESP32 is the only chip whose ROM does not identify the
+flash, so it is the only one requiring an ESP-IDF-compatible second-stage
+bootloader. An explicit constructor removes that requirement for anyone willing to
+supply the capacity, which matters most to custom bootloaders and direct-boot
+images, exactly the cases the requirement excludes.
+
+### Two possible shapes
+
+| | Separate constructor | Capacity field on `Config` |
+|-|---------------------|----------------------------|
+| Call site | `Flash::new_with_capacity(flash, config, capacity)` | `Config::default().with_capacity(n)` |
+| Ambiguity | none: the name says detection is skipped | every `new()` reader must check whether the field was set |
+| Stable surface | one added function | `Config`'s stable surface stops being empty |
+| Additive | yes | yes, `Config` is `#[non_exhaustive]` with BuilderLite |
+
+The separate constructor is preferred. `Config` deliberately has an empty stable
+surface, and a capacity field there would make detection conditional on
+configuration rather than a property of construction.
+
+### Open points
+
+- Whether the caller supplies capacity only, or geometry as well. Page, sector and
+  block sizes are currently fixed constants; a chip needing different ones is a
+  larger change and belongs with [section 2](#2-chipconfig-chip-parameter-vocabulary).
+- Whether the constructor validates the supplied capacity at all. Rejecting a
+  non-sector multiple is cheap and catches typos; rejecting anything else means
+  reintroducing knowledge the driver deliberately lacks.
+- Whether it can be stable from the outset. It should be, since it exists to serve
+  a supported configuration rather than to work around a defect.
+
+### Activation condition
+
+Add this when a user needs the driver on a boot chain that does not populate the
+cached ID, or when the ESP32 bootloader requirement blocks a real consumer. It does
+not need to wait for stabilization, and it does not reopen
+[A13](FLASH-DESIGN.md#a13-no-chip-configuration-at-launch)'s rejection of implicit
+fallback.

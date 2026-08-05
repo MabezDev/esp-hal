@@ -750,9 +750,21 @@ PartitionEntry::as_encrypted_flash_region() -> EncryptedFlashRegion
 
 `FlashRegion` is guaranteed effectively plaintext and implements the blocking NOR
 traits directly. `EncryptedFlashRegion` is guaranteed effectively encrypted and
-exposes inherent `read`, `erase` and encrypted write methods only. It does not
-implement `NorFlash` or `MultiwriteNorFlash`, because a physical erase does not
-read back as plaintext `0xFF` through the decryption view.
+exposes inherent `read`, `erase` and encrypted write methods only. It implements no
+`embedded-storage` trait at all.
+
+Dropping `NorFlash` is a conformance fix rather than a preference. The trait
+documents `erase` as "clearing all data within `[from..to]`. The given range will
+contain all 1s afterwards." Erased flash holds all-1s *ciphertext*, which decrypts
+to pseudorandom plaintext through the decryption view, so no encrypted region can
+satisfy that. `EncryptedNorFlashRegion` in the current bootloader implements
+`NorFlash` regardless (`partitions.rs:869`), alongside `ReadNorFlash`
+(`:851`); only `MultiwriteNorFlash` is correctly omitted today.
+
+`ReadNorFlash` alone would be sound, since a decrypted read has no erase contract
+to violate. It is dropped anyway to keep one rule for the type: an encrypted region
+is reached through inherent methods, never through a trait that a generic caller
+could pair with `NorFlash` expectations.
 
 Both accessors check effective encryption from the partition flags, the partition
 type and the hardware encryption state. Higher-level flows such as OTA own that
@@ -966,9 +978,18 @@ runtime-erased configuration and error surface.
 
 The boot chain has already booted from the internal flash with its default
 commands. General command and geometry overrides serve external chips, not the
-internal driver. There is no capacity escape hatch. Any future exception must
-start from a demonstrated chip and specify more than an assumed capacity when
-its behavior differs from the standard ROM operations.
+internal driver. Any future exception must start from a demonstrated chip and
+specify more than an assumed capacity when its behavior differs from the standard
+ROM operations.
+
+There is no *implicit* capacity fallback: detection either succeeds or `new()`
+fails, and nothing silently substitutes a guess. That is a narrower rule than
+forbidding a capacity escape hatch outright. An explicit constructor that skips
+detection and takes the caller's geometry is a different proposition, because the
+caller states the value rather than the driver inventing one, and it would make
+ESP32 usable without an ESP-IDF-compatible bootloader. It is additive and is
+recorded in
+[`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#11-construction-without-auto-detection).
 
 **Failure is an error, not a panic**, even though the first-stage ROM guarantees a
 valid cache on ten of the eleven targets
