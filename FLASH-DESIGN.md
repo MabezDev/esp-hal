@@ -20,41 +20,14 @@ The current driver and any future external flash driver are separate types:
 driver, including external SPI NOR, chip overrides, custom commands, and public
 flash mapping.
 
-## Status and stable target
+The document is in four parts. **Part I** states what the driver must and must not
+do, independent of how it is shaped or built. **Part II** is the user-facing
+surface. **Part III** is how it works. **Part IV** covers verification and the
+migration away from `esp-storage`. Decisions and their reasoning live in
+[Appendix A](#appendix-a-decision-log); the evidence behind them is in appendices
+B and C.
 
-Everything lands behind `unstable_driver!`, which compiles the module out
-entirely unless the `unstable` feature is on. Stabilization is therefore not a
-matter of removing attributes: stabilization moves `flash` out of the
-`unstable_driver!` block into a plain `#[cfg(flash_driver_supported)] pub mod flash;`.
-
-The intended stable surface is:
-
-| Item | Stable target | Remains unstable |
-|------|---------------|------------------|
-| `Config`, `ConfigError` | yes | |
-| `Flash<'d, Dm: DriverMode>` | yes | |
-| `Flash::new()` returning `Flash<'d, Blocking>` | yes | |
-| `apply_config()` | yes | |
-| `read`, `write`, `erase`, `capacity` | yes | |
-| `Error` | yes | |
-| `peripherals.FLASH` | yes | |
-| `chip_info()`, `ChipInfo` | | yes |
-| encrypted access | | yes |
-| embedded-storage trait implementations | | yes, until embedded-storage 1.0 |
-| `MultiCoreStrategy`, `OtherCoreRunning` | | yes |
-
-The `Dm` parameter is part of the initial API. esp-hal mode parameters have no
-default, so adding it after stabilization would break every explicit `Flash`
-type. Only `Blocking` is constructible in this design. A possible async API is
-deferred without removing the type-state parameter.
-
-Be clear about how much this stabilizes. The stable surface is direct calls to
-`read`, `write`, `erase` and `capacity`. Most real consumers reach for the
-embedded-storage traits or encrypted access instead, and both stay unstable, so
-`esp-bootloader-esp-idf` remains an `unstable` consumer after stabilization
-regardless.
-That is a consequence of workspace policy rather than of this driver; see
-[A9](#a9-embedded-storage-trait-implementations-stay-unstable).
+# Part I: Requirements
 
 ## Scope and non-goals
 
@@ -112,7 +85,45 @@ Existing behavior is preserved except where this table says otherwise. Every
 | Flash-resident and PSRAM-resident buffers are staged through internal RAM | **fixed** | `esp-storage` passes them to ROM with the cache off, which is unsound |
 | Detection cannot yield capacity zero | **fixed** | `esp-storage` returns 0 for an unknown ID, then fails every bounds check |
 
-## Construction and detection
+## Status and stable target
+
+Everything lands behind `unstable_driver!`, which compiles the module out
+entirely unless the `unstable` feature is on. Stabilization is therefore not a
+matter of removing attributes: stabilization moves `flash` out of the
+`unstable_driver!` block into a plain `#[cfg(flash_driver_supported)] pub mod flash;`.
+
+The intended stable surface is:
+
+| Item | Stable target | Remains unstable |
+|------|---------------|------------------|
+| `Config`, `ConfigError` | yes | |
+| `Flash<'d, Dm: DriverMode>` | yes | |
+| `Flash::new()` returning `Flash<'d, Blocking>` | yes | |
+| `apply_config()` | yes | |
+| `read`, `write`, `erase`, `capacity` | yes | |
+| `Error` | yes | |
+| `peripherals.FLASH` | yes | |
+| `chip_info()`, `ChipInfo` | | yes |
+| encrypted access | | yes |
+| embedded-storage trait implementations | | yes, until embedded-storage 1.0 |
+| `MultiCoreStrategy`, `OtherCoreRunning` | | yes |
+
+The `Dm` parameter is part of the initial API. esp-hal mode parameters have no
+default, so adding it after stabilization would break every explicit `Flash`
+type. Only `Blocking` is constructible in this design. A possible async API is
+deferred without removing the type-state parameter.
+
+Be clear about how much this stabilizes. The stable surface is direct calls to
+`read`, `write`, `erase` and `capacity`. Most real consumers reach for the
+embedded-storage traits or encrypted access instead, and both stay unstable, so
+`esp-bootloader-esp-idf` remains an `unstable` consumer after stabilization
+regardless.
+That is a consequence of workspace policy rather than of this driver; see
+[A9](#a9-embedded-storage-trait-implementations-stay-unstable).
+
+# Part II: Public API
+
+## Construction
 
 ### `Config`
 
@@ -150,96 +161,10 @@ and the unstable strategies at runtime is both meaningful and infallible.
 Detection runs once in `new()` and is not repeated. On single-core chips the
 method has nothing to apply and is trivially `Ok(())`.
 
-### Detection
-
-The driver identifies the chip from the 24-bit JEDEC ID held in the ROM's flash
-chip structure. `new()` performs, in order:
-
-1. refresh the cache by calling the ROM's `esp_rom_spi_flash_update_id`, on the
-   ten targets that export it;
-2. read `device_id` through a uniform `esp-rom-sys` accessor;
-3. reject the no-response sentinels `0x000000`, `0xFFFFFF` and `0xFFFF3F`, and
-   the ROM's static default `0x001540EF`;
-4. decode physical capacity from the manufacturer and density bytes;
-5. return `ConfigError::UnknownFlashChip` if step 3 or step 4 fails.
-
-Step 1 issues a flash command, so it runs inside the operation guard like any
-other flash access. Step 4 uses the esptool-derived capacity table.
-
-#### Where the cached ID comes from
-
-| | Populates `device_id` | Driver can refresh it |
-|-|----------------------|-----------------------|
-| Every target except ESP32 | first-stage ROM bootloader, then the second-stage bootloader again | yes, `esp_rom_spi_flash_update_id` |
-| ESP32 | second-stage bootloader only | no |
-
-Before either runs, the structure holds a statically initialized Winbond W25Q16
-descriptor, reporting `device_id` `0x001540EF` and a 2 MiB capacity. That is the
-value step 3 rejects: a plausible-looking wrong answer rather than an obvious one,
-which is why a sentinel check alone is not enough. Addresses, disassembly and the
-per-revision matrix are in
-[B2](#b2-the-cached-jedec-id-and-its-provenance).
-
-Refreshing through the ROM function rather than trusting the boot chain is what
-makes detection independent of the bootloader on those ten targets, and it stays
-within [A1](#a1-no-spi1-register-exec-fallback)'s ROM-functions-only rule.
-
-**ESP32 requires an ESP-IDF-compatible second-stage bootloader.** Its ROM has no
-identification function and `libesp_rom.a` has none to patch in, so this is a
-documented platform requirement rather than something the driver works around.
-See [A13](#a13-no-chip-configuration-at-launch).
-
-#### Byte order
-
-`device_id` is stored most-significant-byte first: manufacturer in bits 23:16,
-memory type in bits 15:8, density in bits 7:0. Every runtime writer converges on
-that layout.
-
-The esptool capacity table and `esp-storage`'s decoder both consume the *raw*
-`RDID` order instead, so porting the table unchanged reads the wrong byte:
-
-| Field | Raw `RDID` order (esptool, `esp-storage`) | Cached `device_id` order |
-|-------|------------------------------------------|--------------------------|
-| Manufacturer | bits 7:0 | bits 23:16 |
-| Density, standard vendors | bits 23:16 | bits 7:0 |
-| Density, Adesto (`0x1F`) | bits 12:8 | bits 12:8 |
-
-Only the Adesto middle-byte case is order-independent. This asymmetry is the
-easiest way to get detection silently wrong, so the HIL test asserts decoded
-capacity against the known board rather than asserting that decoding succeeded.
-
-The ROM's static default is stored in raw order, which is why its density byte is
-the invalid `0xEF` under the correct decode. That is a useful accident, not a
-safety property, hence the explicit check in step 3.
-
-#### Capacity policy
-
-The driver reports detected physical capacity and offers no override. An
-unsupported density encoding is a construction error, not a fallback to a guess.
-Capacity zero is therefore never reachable, which is the state `esp-storage` can
-land in today and then fail every bounds check from.
-
-Detected capacity comes from `device_id`, never from the cached `chip_size`: the
-second-stage bootloader overwrites `chip_size` with the size configured in the
-binary image header, so it does not describe the physical part. ESP-IDF compares
-the two and clamps to the header value; this driver deliberately does not copy
-that policy.
-
-#### Why the driver does not read the ID itself
-
-ESP-IDF obtains the full ID through `memspi_host_read_id_hs()`, which sends
-`CMD_RDID` through an initialized MSPI host's `common_command` path with a
-three-byte MISO phase, reads twice, and rejects a mismatch. That host context
-does not exist in an esp-hal application, and ESP-IDF itself falls back to the
-cached `device_id` when the boot flash is already in octal mode.
-
-`esp_rom_spiflash_read_user_cmd()` is not an alternative: it returns a single
-response byte and cannot carry the density. The ROM refresh function in step 1
-is the better instrument, because it already handles the high-speed dummy-length
-case that a hand-rolled read would have to replicate. Evidence for both is in
-[B2](#b2-the-cached-jedec-id-and-its-provenance).
-
 ### Construction errors
+
+Construction fails in exactly one circumstance: the chip cannot be identified.
+[Detection](#detection) covers how, and why that is reachable at all.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -255,11 +180,10 @@ pub enum ConfigError {
 The variant is deliberately coarse: it says the platform assumption did not hold,
 not which byte was wrong. The raw cached value is logged before the error is
 returned. A caller who wants a panic can `unwrap()`; a bootloader or recovery
-tool can fall back to its own detection. Why an error rather than the panic the
-original design specified is recorded in
-[A13](#a13-no-chip-configuration-at-launch).
+tool can fall back to its own detection. Why an error rather than a panic is
+recorded in [A13](#a13-no-chip-configuration-at-launch).
 
-## Public API
+## The `Flash` type
 
 The driver owns the `FLASH` singleton, capacity, unlock state, and mode marker.
 Working storage is static internal RAM rather than part of the movable driver
@@ -340,9 +264,9 @@ returns. The low-level `esp_rom_spiflash_*` functions do not perform this
 system-level cleanup themselves.
 
 The new driver follows that ownership model with a short-lived internal
-operation guard. The guard restores cache, interrupts, the other core, and the
-flash lock on every return path. This internal guard may use `Drop`; the
-long-lived `Flash` type does not.
+operation guard. The guard restores the cache, the other core and the lock on every
+return path, and releasing the lock is what restores interrupts. This internal guard
+may use `Drop`; the long-lived `Flash` type does not.
 
 `esp_rom_spiflash_unlock()` deliberately changes persistent flash status bits.
 Dropping the driver must not try to reconstruct or restore an unknown
@@ -351,7 +275,7 @@ the next operation, not peripheral ownership state. If a timed-out operation
 has already been accepted by the flash chip, dropping a Rust value cannot
 cancel it; any recovery must be explicit in that operation's error path.
 
-### Operation errors
+## Operation errors
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -389,6 +313,247 @@ existing practice: `spi::Error` gates its DMA variant and `uart::ConfigError` ga
 `Unknown` carries no payload; the raw code is logged instead. See
 [A6](#a6-error-type-shape).
 
+## Encrypted access
+
+`read_encrypted()` returns bytes as the decryption hardware sees them. Offsets and
+lengths are unconstrained. When flash encryption is off it returns the plaintext
+already in flash, which is what makes the encryption-off HIL configuration useful.
+
+`write_encrypted()` follows ESP-IDF's `esp_flash_write_encrypted()` contract:
+
+- address and length must be multiples of 16 bytes, on every chip;
+- the destination must already be erased, and the driver never erases implicitly;
+- the driver never changes bytes outside the requested range;
+- writing an external flash chip is not supported.
+
+The 16-byte contract is uniform by decision
+([A19](#a19-encrypted-writes-match-esp-idf)), which costs a bounded row-local
+decrypt and re-encrypt on ESP32; see [Row size](#row-size).
+
+This removes `esp-storage`'s implicit 4096-byte sector read-modify-write, which is
+a different thing from the ESP32 row handling in [Row size](#row-size): no erase,
+and nothing outside the requested range changes. A separate sector-overwrite helper
+can be added later without changing this API, and is recorded in
+[`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#6-encrypted-sector-overwrite).
+
+## embedded-storage traits
+
+The blocking traits are available for `Flash<'_, Blocking>`:
+
+```rust
+#[instability::unstable]
+impl ErrorType for Flash<'_, Blocking> {
+    type Error = Error;
+}
+
+#[instability::unstable]
+impl ReadNorFlash for Flash<'_, Blocking> {
+    const READ_SIZE: usize = 1;
+
+    #[ram]
+    fn read(&mut self, offset: u32, data: &mut [u8])
+        -> Result<(), Self::Error> { /* ... */ }
+
+    fn capacity(&self) -> usize { /* ... */ }
+}
+
+#[instability::unstable]
+impl NorFlash for Flash<'_, Blocking> {
+    const WRITE_SIZE: usize = 4;
+    const ERASE_SIZE: usize = 4096;
+
+    #[ram]
+    fn erase(&mut self, from: u32, to: u32)
+        -> Result<(), Self::Error> { /* ... */ }
+
+    #[ram]
+    fn write(&mut self, offset: u32, data: &[u8])
+        -> Result<(), Self::Error> { /* ... */ }
+}
+
+#[instability::unstable]
+impl MultiwriteNorFlash for Flash<'_, Blocking> {}
+```
+
+`MultiwriteNorFlash` applies only to plain access. Encrypted access has no
+multiwrite implementation.
+
+`NotAligned` and `OutOfBounds` map directly to the matching
+`NorFlashErrorKind`. Other errors map to `Other`.
+
+`READ_SIZE` is 1 unconditionally, and this is portable to every target. The
+capability is not new: `esp-storage`'s *inherent* `read` already supports unaligned
+offsets and lengths on all eleven chips with no feature flag and no chip gating, so
+byte-granular reads are the shipped default and only the `NorFlash` constant
+disagrees with them. Its `bytewise-read` feature, which sets `READ_SIZE = 1`, has
+no chip gating either. The mechanism uses only the documented ROM contract, so it
+is portable by construction rather than by luck. See
+[C6](#c6-buffers-and-read_size).
+
+Relaxing the constant is compatible for callers but changes what generic storage
+layers see, so it needs a migration note. It also needs a HIL gate: no unaligned
+read is exercised on hardware today, because `bytewise-read` is off by default and
+every offset in the existing test is word-aligned. Like the dual-core read test,
+this is new coverage rather than a port.
+
+The legacy `ReadStorage` and `Storage` traits are not implemented. Callers that
+need a plain sub-sector update must perform the read-modify-write themselves.
+
+The dependency uses the version-suffixed name `embedded-storage-03`. It is
+optional and enabled by `unstable`; no new cargo feature is added. The
+implementations stay unstable, including through stabilization, and the suffixed
+name keeps
+a later 1.0 implementation additive. See
+[A9](#a9-embedded-storage-trait-implementations-stay-unstable).
+
+## The bootloader's partition accessors
+
+`esp-bootloader-esp-idf` is the driver's most demanding consumer, because a
+partition is either effectively plaintext or effectively encrypted and the two
+support different operations. It exposes two direct, checked conversions from a
+partition entry:
+
+```text
+PartitionEntry::as_flash_region()           -> FlashRegion
+PartitionEntry::as_encrypted_flash_region() -> EncryptedFlashRegion
+```
+
+`FlashRegion` is guaranteed effectively plaintext and implements the blocking NOR
+traits directly. `EncryptedFlashRegion` is guaranteed effectively encrypted and
+exposes inherent `read`, `erase` and encrypted write methods only. It implements no
+`embedded-storage` trait at all.
+
+Dropping `NorFlash` is a conformance fix rather than a preference. The trait
+documents `erase` as "clearing all data within `[from..to]`. The given range will
+contain all 1s afterwards." Erased flash holds all-1s *ciphertext*, which decrypts
+to pseudorandom plaintext through the decryption view, so no encrypted region can
+satisfy that. `EncryptedNorFlashRegion` in the current bootloader implements
+`NorFlash` regardless (`partitions.rs:869`), alongside `ReadNorFlash`
+(`:851`); only `MultiwriteNorFlash` is correctly omitted today.
+
+`ReadNorFlash` alone would be sound, since a decrypted read has no erase contract
+to violate. It is dropped anyway to keep one rule for the type: an encrypted region
+is reached through inherent methods, never through a trait that a generic caller
+could pair with `NorFlash` expectations.
+
+Both accessors check effective encryption from the partition flags, the partition
+type and the hardware encryption state. Higher-level flows such as OTA own that
+policy choice and pick the accessor; any enum needed to hide a runtime choice
+stays private to the bootloader crate. There is no intermediate dynamic
+`FlashRegion` followed by `NorFlashRegion` or `EncryptedNorFlashRegion`.
+
+# Part III: Implementation
+
+## Detection
+
+The driver identifies the chip from the 24-bit JEDEC ID held in the ROM's flash
+chip structure. `new()` performs, in order:
+
+1. read `device_id` through a uniform `esp-rom-sys` accessor;
+2. reject the no-response sentinels `0x000000`, `0xFFFFFF` and `0xFFFF3F`, and
+   the ROM's static default `0x001540EF`;
+3. decode physical capacity from the manufacturer and density bytes, using the
+   esptool-derived table;
+4. return `ConfigError::UnknownFlashChip` if step 2 or step 3 fails.
+
+**`new()` issues no flash command.** It reads a cached value and decodes it. The
+driver never asks the chip for its identity, not even through the ROM function that
+would do it: identification is the boot chain's job, and re-doing it would be a
+second detection path to own and maintain for a value already in memory. See
+[Why the driver does not read the ID itself](#why-the-driver-does-not-read-the-id-itself).
+
+### Where the cached ID comes from
+
+| | Populates `device_id` |
+|-|----------------------|
+| Every target except ESP32 | first-stage ROM bootloader, then the second-stage bootloader again |
+| ESP32 | second-stage bootloader only |
+
+Before either runs, the structure holds a statically initialized Winbond W25Q16
+descriptor, reporting `device_id` `0x001540EF` and a 2 MiB capacity. That is the
+value step 2 rejects: a plausible-looking wrong answer rather than an obvious one,
+which is why a sentinel check alone is not enough. It is byte-identical on every
+chip and revision, so one constant covers all of them. Addresses, disassembly and the
+per-revision matrix are in
+[B2](#b2-the-cached-jedec-id-and-its-provenance).
+
+The driver depends on that boot chain rather than repeating its work. On ten of the
+eleven targets the first-stage ROM is sufficient on its own, so no second-stage
+bootloader is needed for the value to be correct.
+
+**ESP32 requires an ESP-IDF-compatible second-stage bootloader.** Its ROM has no
+identification function and `libesp_rom.a` has none to patch in, so this is a
+documented platform requirement rather than something the driver works around.
+See [A13](#a13-no-chip-configuration-at-launch).
+
+### Byte order
+
+`device_id` is stored most-significant-byte first: manufacturer in bits 23:16,
+memory type in bits 15:8, density in bits 7:0. Every runtime writer converges on
+that layout.
+
+The esptool capacity table and `esp-storage`'s decoder both consume the *raw*
+`RDID` order instead, so porting the table unchanged reads the wrong byte:
+
+| Field | Raw `RDID` order (esptool, `esp-storage`) | Cached `device_id` order |
+|-------|------------------------------------------|--------------------------|
+| Manufacturer | bits 7:0 | bits 23:16 |
+| Density, standard vendors | bits 23:16 | bits 7:0 |
+| Density, Adesto (`0x1F`) | bits 12:8 | bits 12:8 |
+
+Only the Adesto middle-byte case is order-independent. This asymmetry is the
+easiest way to get detection silently wrong, so the HIL test asserts decoded
+capacity against the known board rather than asserting that decoding succeeded.
+
+The ROM's static default is stored in raw order, which is why its density byte is
+the invalid `0xEF` under the correct decode. That is a useful accident, not a
+safety property, hence the explicit check in step 2.
+
+### Capacity policy
+
+The driver reports detected physical capacity and offers no override. An
+unsupported density encoding is a construction error, not a fallback to a guess.
+Capacity zero is therefore never reachable, which is the state `esp-storage` can
+land in today and then fail every bounds check from.
+
+Detected capacity comes from `device_id`, never from the cached `chip_size`: the
+second-stage bootloader overwrites `chip_size` with the size configured in the
+binary image header, so it does not describe the physical part. ESP-IDF compares
+the two and clamps to the header value; this driver deliberately does not copy
+that policy.
+
+### Why the driver does not read the ID itself
+
+The value is already in memory, put there by a `CMD_RDID` the boot chain has
+already issued. Reading it again would buy nothing and cost a second detection
+path, so the question is only whether the cached value is trustworthy, and
+[Where the cached ID comes from](#where-the-cached-id-comes-from) answers that.
+
+The cost side is worth being concrete about, because "just read the ID" sounds
+cheap and is not. Every operation in this driver lowers onto a dedicated
+`esp_rom_spiflash_*` function ([A3](#a3-ops-shaped-interface-retained-backend-enum-removed)),
+which is what keeps it small. Identification has no such function that returns
+three bytes:
+
+| Route | Why it is not free |
+|-------|--------------------|
+| `esp_rom_spiflash_read_user_cmd()` | returns a single response byte, so it cannot carry the density at all |
+| ESP-IDF's `memspi_host_read_id_hs()` | needs an initialized MSPI host context that does not exist in an esp-hal application, and would mean owning that context ([`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#3-internal-custom-commands-if-chip-overrides-ever-return)) |
+| The ROM's `esp_rom_spi_flash_update_id` | exists on ten targets, but calling it means construction issues a flash command, and it is absent on ESP32 so the code path would be conditional anyway |
+| Hand-rolled SPI1 register sequence | breaks [A1](#a1-no-spi1-register-exec-fallback) and means owning the dummy-cycle and octal-mode handling the ROM already does |
+
+Each of those is code to write, `cfg` per target, keep working across eleven chips
+and eleven ROM revisions, and test on hardware, in order to recompute a `u32` that
+is already sitting in a known location. ESP-IDF makes the same call in the case
+where its own `RDID` path is inappropriate: `esp_flash_init_main()` falls back to
+`g_rom_flashchip.device_id` in octal mode. Evidence in
+[B2](#b2-the-cached-jedec-id-and-its-provenance).
+
+The tradeoff this accepts is stated plainly in
+[Where the cached ID comes from](#where-the-cached-id-comes-from): the driver
+inherits whatever the boot chain wrote, which is why detection is fallible and why
+ESP32 carries a bootloader requirement.
+
 ## How an operation runs
 
 Read, write, and erase use the same chunk loop:
@@ -396,19 +561,40 @@ Read, write, and erase use the same chunk loop:
 ```text
 validate bounds and choose direct or bounce buffer
                          |
-acquire flash lock and apply the other-core policy
+take the driver's lock  (disables local interrupts)
                          |
-disable local interrupts and suspend cache
+apply the other-core policy
+                         |
+suspend cache
                          |
 call the low-level ROM flash function
                          |
 invalidate affected mappings after write/erase
                          |
-resume cache and interrupts, restore the other core, release the lock
+resume cache, restore the other core, release the lock
 ```
 
-The lock is acquired before the other core is parked. This prevents a frozen
-core from holding the flash lock. One chunk is one bounded ROM call.
+The lock is taken before the other core is parked, so a frozen core cannot be
+holding it. One chunk is one bounded ROM call.
+
+### Locking
+
+The driver owns a lock; it does not take a critical section. `esp_sync::RawMutex`
+is the right primitive and it is not one: it disables interrupts on the current
+core while held, and on multi-core chips adds compare-and-swap ownership rather
+than a system-wide critical section. Being inside esp-hal is what makes this
+available, so there is no reason to reach for a coarser mechanism.
+
+That collapses two steps into one. Disabling local interrupts is not a separate
+act from locking, it is what taking the lock does, and it is needed for the same
+reason the cache is suspended: with the cache off, an interrupt handler resident in
+flash cannot be fetched.
+
+**There is no way to run without it.** `esp-storage` gates its equivalent behind a
+`critical-section` cargo feature, and with the feature off
+`maybe_with_critical_section` degrades to calling the closure directly, leaving
+concurrent access and the cache-off window unprotected. That option is not carried
+forward: the lock is unconditional and no feature removes it.
 
 ### Cache handling
 
@@ -418,7 +604,7 @@ The ROM functions handle no cache state, so the driver owns all of it
 | | Suspend cache around the ROM call | Invalidate after write/erase |
 |-|-----------------------------------|------------------------------|
 | ROM functions | no | no |
-| `esp-storage`, plain operations | no, critical section only | no |
+| `esp-storage`, plain operations | no, lock only, and that lock is feature-gated | no |
 | `esp-storage`, encrypted write | no | yes (`hardware.rs:37-40`) |
 | ESP-IDF | yes, per operation | yes ([B3](#b3-esp-idf-operation-cleanup)) |
 | This driver | yes | yes |
@@ -438,8 +624,8 @@ only the staged path is constrained by the buffer:
 | Staged through the bounce buffer | size of the bounce buffer | buffer capacity |
 | Erase | one sector or one block | ROM primitive granularity |
 
-Every boundary pays a full guard: lock, park, disable interrupts, suspend cache,
-call ROM, invalidate, resume, unpark, release. Both limits are private
+Every boundary pays a full guard: lock, park, suspend cache, call ROM, invalidate,
+resume, unpark, release. Both limits are private
 implementation policy rather than stable guarantees. Rationale and the latency
 trade are in [A21](#a21-direct-chunk-limits-follow-esp-idf).
 
@@ -447,7 +633,15 @@ trade are in [A21](#a21-direct-chunk-limits-follow-esp-idf).
 
 The rule is by capability, not by call depth: **every method that performs, or
 could perform, a flash operation carries `#[ram]`, along with everything it calls
-on that path.** Methods that only touch driver state stay out of RAM.
+on that path.**
+
+The test is whether the method can cause a SPI1 transaction or manipulate the
+cache, not whether it touches hardware at all. A method that reads or writes a
+field of the `Flash` value stays out of RAM even though that field describes the
+peripheral; a method that pokes a cache or SPI1 register goes in RAM even if it
+never reaches the flash chip. What matters is only this: while the cache is
+suspended, an instruction fetch from flash cannot be serviced, so anything
+executing in that window must already be resident.
 
 | Item | `#[ram]` | Why |
 |------|----------|-----|
@@ -455,17 +649,13 @@ on that path.** Methods that only touch driver state stay out of RAM.
 | `read_encrypted`, `write_encrypted` | yes | as above, plus MMU mapping |
 | The operation guard, ROM wrappers, cache and interrupt manipulation, mapping invalidation | yes | run with the cache suspended |
 | embedded-storage trait methods | yes | they delegate onto the flash path |
-| `capacity` | no | returns the value detected during construction; `esp-storage`'s equivalent is a field read |
+| `new` | no | reads a cached `u32` and decodes it; issues no flash command |
+| `capacity` | no | returns the value decoded during construction; `esp-storage`'s equivalent is a field read |
 | `chip_info` | no | reports stored identification and fixed geometry |
 | `apply_config` | no | software policy, no register or flash access |
-| `new` | no, with a caveat below | |
 
-`new()` is the awkward case. It does not touch flash *directly*, but detection
-refreshes the cached ID through a ROM function that issues a flash command. That
-refresh therefore lives behind a `#[ram]` helper, which keeps `new()` itself out
-of RAM without leaving flash-touching code in a flash-resident function. If the
-implementation ends up inlining the refresh into `new()`, `new()` needs the
-attribute too, and the linked-section check is what catches that.
+`new()` is unambiguous because detection does not touch the chip: it reads the
+cached ID and decodes it, so there is no flash command to be resident for.
 
 Prefer over-applying to under-applying. A method that gains a flash operation
 later, or that the compiler inlines into one, is a hang rather than a test
@@ -548,29 +738,12 @@ The driver aligns the offset down rather than passing a byte address to ROM, eve
 though at least one ROM implementation accepts one. That behavior is undocumented
 and not worth assuming uniform across eleven targets.
 
-## Encrypted access
+## Encrypted access internals
 
-`read_encrypted()` maps flash pages through the private MMU path so reads are
-decrypted by hardware. P4 must invalidate both L1 data cache and L2 after
-changing the mapping. When flash encryption is off, the read returns the
-plaintext bytes.
-
-`write_encrypted()` follows ESP-IDF's `esp_flash_write_encrypted()` contract:
-
-- address and length must be multiples of 16 bytes, on every chip;
-- the destination must already be erased, and the driver never erases implicitly;
-- the driver never changes bytes outside the requested range;
-- writing an external flash chip is not supported.
-
-The 16-byte contract is uniform by decision
-([A19](#a19-encrypted-writes-match-esp-idf)), which costs a bounded row-local
-decrypt and re-encrypt on ESP32; see [Row size](#row-size).
-
-This removes `esp-storage`'s implicit 4096-byte sector read-modify-write, which
-is a different thing from the ESP32 row handling above: no erase, and nothing
-outside the requested range changes. A separate sector-overwrite helper can be
-added later without changing this API, and is recorded in
-[`FLASH-DEFERRED.md`](FLASH-DEFERRED.md#6-encrypted-sector-overwrite).
+Encrypted reads go through the private MMU path in `mmu.rs`: map the flash page,
+copy through the mapping so the decryption hardware sees the access, then unmap and
+invalidate. P4 must invalidate both L1 data cache and L2 after changing a mapping,
+which is why it carries its own variant of that code.
 
 ### Row size
 
@@ -639,76 +812,6 @@ No watchdog is fed inside a ROM call. A future callback at chunk boundaries
 could support watchdog feeding or progress reports, but that API is not
 designed here.
 
-## embedded-storage traits
-
-The blocking traits are available for `Flash<'_, Blocking>`:
-
-```rust
-#[instability::unstable]
-impl ErrorType for Flash<'_, Blocking> {
-    type Error = Error;
-}
-
-#[instability::unstable]
-impl ReadNorFlash for Flash<'_, Blocking> {
-    const READ_SIZE: usize = 1;
-
-    #[ram]
-    fn read(&mut self, offset: u32, data: &mut [u8])
-        -> Result<(), Self::Error> { /* ... */ }
-
-    fn capacity(&self) -> usize { /* ... */ }
-}
-
-#[instability::unstable]
-impl NorFlash for Flash<'_, Blocking> {
-    const WRITE_SIZE: usize = 4;
-    const ERASE_SIZE: usize = 4096;
-
-    #[ram]
-    fn erase(&mut self, from: u32, to: u32)
-        -> Result<(), Self::Error> { /* ... */ }
-
-    #[ram]
-    fn write(&mut self, offset: u32, data: &[u8])
-        -> Result<(), Self::Error> { /* ... */ }
-}
-
-#[instability::unstable]
-impl MultiwriteNorFlash for Flash<'_, Blocking> {}
-```
-
-`MultiwriteNorFlash` applies only to plain access. Encrypted access has no
-multiwrite implementation.
-
-`NotAligned` and `OutOfBounds` map directly to the matching
-`NorFlashErrorKind`. Other errors map to `Other`.
-
-`READ_SIZE` is 1 unconditionally, and this is portable to every target. The
-capability is not new: `esp-storage`'s *inherent* `read` already supports unaligned
-offsets and lengths on all eleven chips with no feature flag and no chip gating, so
-byte-granular reads are the shipped default and only the `NorFlash` constant
-disagrees with them. Its `bytewise-read` feature, which sets `READ_SIZE = 1`, has
-no chip gating either. The mechanism uses only the documented ROM contract, so it
-is portable by construction rather than by luck. See
-[C6](#c6-buffers-and-read_size).
-
-Relaxing the constant is compatible for callers but changes what generic storage
-layers see, so it needs a migration note. It also needs a HIL gate: no unaligned
-read is exercised on hardware today, because `bytewise-read` is off by default and
-every offset in the existing test is word-aligned. Like the dual-core read test,
-this is new coverage rather than a port.
-
-The legacy `ReadStorage` and `Storage` traits are not implemented. Callers that
-need a plain sub-sector update must perform the read-modify-write themselves.
-
-The dependency uses the version-suffixed name `embedded-storage-03`. It is
-optional and enabled by `unstable`; no new cargo feature is added. The
-implementations stay unstable, including through stabilization, and the suffixed
-name keeps
-a later 1.0 implementation additive. See
-[A9](#a9-embedded-storage-trait-implementations-stay-unstable).
-
 ## Private internals: `rom.rs` and `mmu.rs`
 
 `rom.rs` owns:
@@ -734,70 +837,7 @@ function or a real `NotSupported` environmental case
 ([A3](#a3-ops-shaped-interface-retained-backend-enum-removed)). There is no
 partial dispatch, `unreachable!()`, or panic arm.
 
-## Consumers and migration
-
-### The bootloader's partition accessors
-
-`esp-bootloader-esp-idf` is the driver's most demanding consumer, because a
-partition is either effectively plaintext or effectively encrypted and the two
-support different operations. It exposes two direct, checked conversions from a
-partition entry:
-
-```text
-PartitionEntry::as_flash_region()           -> FlashRegion
-PartitionEntry::as_encrypted_flash_region() -> EncryptedFlashRegion
-```
-
-`FlashRegion` is guaranteed effectively plaintext and implements the blocking NOR
-traits directly. `EncryptedFlashRegion` is guaranteed effectively encrypted and
-exposes inherent `read`, `erase` and encrypted write methods only. It implements no
-`embedded-storage` trait at all.
-
-Dropping `NorFlash` is a conformance fix rather than a preference. The trait
-documents `erase` as "clearing all data within `[from..to]`. The given range will
-contain all 1s afterwards." Erased flash holds all-1s *ciphertext*, which decrypts
-to pseudorandom plaintext through the decryption view, so no encrypted region can
-satisfy that. `EncryptedNorFlashRegion` in the current bootloader implements
-`NorFlash` regardless (`partitions.rs:869`), alongside `ReadNorFlash`
-(`:851`); only `MultiwriteNorFlash` is correctly omitted today.
-
-`ReadNorFlash` alone would be sound, since a decrypted read has no erase contract
-to violate. It is dropped anyway to keep one rule for the type: an encrypted region
-is reached through inherent methods, never through a trait that a generic caller
-could pair with `NorFlash` expectations.
-
-Both accessors check effective encryption from the partition flags, the partition
-type and the hardware encryption state. Higher-level flows such as OTA own that
-policy choice and pick the accessor; any enum needed to hide a runtime choice
-stays private to the bootloader crate. There is no intermediate dynamic
-`FlashRegion` followed by `NorFlashRegion` or `EncryptedNorFlashRegion`.
-
-### Host tests
-
-esp-hal does not build for the host, so the driver cannot copy `esp-storage`'s
-emulation backend. The bootloader host tests must therefore depend on an internal
-flash abstraction and a test mock rather than on `Flash` itself, and the hardware
-migration happens only after that seam is in place.
-
-### Migration is per binary, not incremental
-
-Both drivers consume the same peripheral singleton. `esp-storage` re-exports it as
-`esp_storage::Flash` (`common.rs:4`) and `FlashStorage::new` takes it by value
-(`common.rs:115`); `esp_hal::flash::Flash::new` takes the same `FLASH<'d>`. A binary
-can therefore hold one or the other, never both.
-
-That is intended rather than an obstacle: it is the mechanism that stops two
-drivers racing on one flash chip, and it falls out of the singleton model for free.
-The consequence for users is that a crate cannot be migrated a call site at a time.
-The switch is per binary, including any dependency that reaches for
-`esp-storage` itself, so the migration guide has to say so plainly. It is also why
-`esp-storage`'s HIL test and the new `flash.rs` test stay separate binaries rather
-than one.
-
-### Retired surface
-
-The public `ll` module is not carried forward. Its known consumer,
-`alloc_psram.rs`, moves to `Flash::write`.
+# Part IV: Verification and migration
 
 ## Validation gates
 
@@ -810,7 +850,7 @@ because several of them pass trivially if written the obvious way.
 |------|----------------|
 | Decoded capacity equals each board's *known* capacity, every chip family, including octal boot modes | asserting only that decoding succeeded, which passes with the byte order reversed |
 | Sentinels, the ROM default `0x001540EF`, and unsupported densities return `ConfigError::UnknownFlashChip` | a plausible 2 MiB descriptor being accepted as real |
-| `esp_rom_spi_flash_update_id` links and returns the expected ID on all ten targets exporting it, including an octal mode that takes its dummy-length branch | the refresh silently not running |
+| The cached ID is correct in an octal boot mode, where the ROM takes its dummy-length branch | detection being validated only in the default read mode |
 | On ESP32, the cached ID is correct under the ESP-IDF bootloader | the documented requirement drifting untested |
 | The ESP32 bootloader requirement appears in the module `Limitations` block and on `new()` | an undocumented platform constraint |
 
@@ -822,7 +862,7 @@ because several of them pass trivially if written the obvious way.
 | Direct and staged reads and writes across their respective chunk boundaries, plus unaligned reads whose aligned superset crosses one | off-by-one in the chunk arithmetic |
 | Unaligned read offsets *and* unaligned lengths, including a length that is 1, 2 and 3 bytes short of a word | the ROM's word-rounded tail overrunning the destination ([C6](#c6-buffers-and-read_size)). No unaligned read runs on hardware today, so this is new coverage |
 | Flash-resident and PSRAM buffers where PSRAM exists | the staging path being skipped |
-| Linked sections: every flash-operating method, the guard and the ROM wrappers are in RAM; `new`, `apply_config`, `capacity`, `chip_info` are not | the detection refresh being inlined into `new` |
+| Linked sections: every flash-operating method, the guard and the ROM wrappers are in RAM; `new`, `apply_config`, `capacity`, `chip_info` are not | a flash operation reaching a method that is not resident |
 | ESP32 flash HIL test at optimization level 0 | the dropped `esp-storage` opt-level requirement |
 | Dual-core read test: `AutoPark` stops XIP on the other core per read chunk and restores it | reads being left unguarded |
 | Throughput versus `esp-storage`, one RISC-V and one Xtensa target | a chunk policy regression |
@@ -850,6 +890,38 @@ of fleet scope.
 
 No design questions remain open; what is left is measurement, not choice.
 
+## Host tests
+
+`esp-bootloader-esp-idf` already reaches flash through a private `FlashAccess`
+trait whose `FlashStorage` alias resolves to an in-memory `MockFlash` under the
+`std` feature. Swapping its backend to this driver is a change to one type alias.
+
+Moving that mock into its own crate would let both consumers share it: the
+bootloader keeps its host tests, and this driver gains host coverage of everything
+that is pure logic, bounds and alignment checks, chunk arithmetic, buffer routing
+and the identification decode. Substituting at the ROM-call boundary is what makes
+that tractable, since nothing above that boundary is chip-specific.
+
+## Migration is per binary, not incremental
+
+Both drivers consume the same peripheral singleton. `esp-storage` re-exports it as
+`esp_storage::Flash` (`common.rs:4`) and `FlashStorage::new` takes it by value
+(`common.rs:115`); `esp_hal::flash::Flash::new` takes the same `FLASH<'d>`. A binary
+can therefore hold one or the other, never both.
+
+That is intended rather than an obstacle: it is the mechanism that stops two
+drivers racing on one flash chip, and it falls out of the singleton model for free.
+The consequence for users is that a crate cannot be migrated a call site at a time.
+The switch is per binary, including any dependency that reaches for
+`esp-storage` itself, so the migration guide has to say so plainly. It is also why
+`esp-storage`'s HIL test and the new `flash.rs` test stay separate binaries rather
+than one.
+
+## Retired surface
+
+The public `ll` module is not carried forward. Its known consumer,
+`alloc_psram.rs`, moves to `Flash::write`.
+
 ## Appendix A: Decision log
 
 This appendix records the final result of each reviewed design question.
@@ -863,10 +935,15 @@ execution would add RAM-resident bit manipulation for no current operation. The
 driver calls ROM functions only. Unsupported future commands may return
 `NotSupported`.
 
-`esp-storage` reads `RDID` from SPI1 registers itself, so this rule looks like it
-costs a capability. It does not: the ROM's own `esp_rom_spi_flash_update_id`
-provides the same bootloader independence through a ROM function on ten of the
-eleven targets, and ESP32 is covered by the documented bootloader requirement in
+`esp-storage` reads `RDID` from SPI1 registers itself, so this rule does cost a
+capability: the driver cannot identify the chip independently of the boot chain. It
+does not need to. The boot chain has already issued that `RDID` and left the result
+in memory, and on ten of the eleven targets the first-stage ROM does it unaided
+([B2](#b2-the-cached-jedec-id-and-its-provenance)). Recomputing it would mean
+owning an identification path that no single ROM function provides, for a value
+already available; see
+[Why the driver does not read the ID itself](#why-the-driver-does-not-read-the-id-itself).
+ESP32's dependency is covered by the documented requirement in
 [A13](#a13-no-chip-configuration-at-launch).
 
 ### A2: ESP32 opt-level requirement dropped
@@ -1048,9 +1125,11 @@ Two narrower rules are rejected:
 
 Capability is the boundary a reviewer and a linked-section check can both apply.
 
-`new()` sits on the line, because detection refreshes the cached ID through a ROM
-function that issues a flash command. Keeping that refresh in a `#[ram]` helper
-keeps `new()` out of RAM.
+The test is "can this cause a SPI1 transaction or touch the cache", not "does this
+touch hardware". Reading a field that happens to describe the peripheral is not a
+flash operation; poking a cache register is, even without reaching the chip.
+`new()` falls on the safe side because detection reads a cached value and never
+asks the chip anything.
 
 This is an implementation rule verified from linked sections, not a stable
 placement guarantee. The driver value may move because working storage is a static
@@ -1158,7 +1237,8 @@ Whole-chip erase evidence is kept with that deferred API in
 ### B2: The cached JEDEC ID and its provenance
 
 **The ROM's static default.** `.data_spi_flash` in all 17 ROM ELFs contains the
-byte pattern `ef401500 00002000 00000100 00100000 00010000 ffff0000`, which is
+**byte-identical** pattern `ef401500 00002000 00000100 00100000 00010000 ffff0000`,
+differing only in its offset within the section, which is
 `esp_rom_spiflash_chip_t` pre-initialized to a Winbond W25Q16: `device_id`
 `0x001540EF`, `chip_size` `0x00200000`, `block_size` `0x00010000`,
 `sector_size` `0x00001000`, `page_size` `0x00000100`, `status_mask` `0x0000FFFF`.
@@ -1307,10 +1387,10 @@ to `SPI_MISO_DLEN`, which is 8 bits.
 So the cache remains the right source for an internal-only driver: it identifies
 the chip that supplied the running image, it is the value ESP-IDF itself falls
 back to in octal mode, and it avoids depending on an application-initialized MSPI
-host context. Better still, on ten targets the driver can refresh it through
-`esp_rom_spi_flash_update_id` rather than trusting whoever booted us, which is
-strictly stronger than `esp-storage`'s hand-rolled register read and stays within
-the ROM-functions-only rule. ESP32 keeps the bootloader dependency, which is why
+host context. The driver reads that cache and does not refresh it: the ROM's
+`esp_rom_spi_flash_update_id` would do so on ten targets, but calling it would put
+a flash command in construction and still need a conditional path for ESP32, to
+recompute a value the boot chain has already written. ESP32's dependency is why
 detection stays fallible. The implementation adds the uniform accessor and
 validates decoded capacity against known boards.
 
@@ -1462,15 +1542,17 @@ Reads and writes split by **sector**, never by page: `write_nor` steps by
 would make a 256-byte driver chunk look like parity when it is a sixteenfold
 reduction.
 
-The lock is released between chunks. This critical section does not provide
-ESP-IDF's explicit cache suspend/resume lifecycle; the new driver adds that
-per-operation guard.
+The lock is released between chunks. It does not provide ESP-IDF's explicit cache
+suspend and resume lifecycle; the new driver adds that per-operation guard.
 
 ### C3: Locking and multicore
 
-The critical section uses `esp_sync::RawMutex` (`lib.rs:66-72`). On multi-core
-chips this is a cross-core spinlock plus local interrupt disable. It does not
-stop the other core from executing from flash.
+`maybe_with_critical_section` wraps each ROM call in `esp_sync::RawMutex`
+(`lib.rs:66-72`), which disables local interrupts and, on multi-core chips, takes
+compare-and-swap ownership. It is not a global critical section despite the name of
+the function and its feature. It does not stop the other core from executing from
+flash, and the `critical-section` feature can remove it entirely, leaving the bare
+closure call (`lib.rs:74-76`).
 
 `MultiCoreStrategy` is in `common.rs:232-248`. Its hooks guard write and erase,
 not read. `AutoPark` uses `CpuControl::park_core`, which applies the RTC
