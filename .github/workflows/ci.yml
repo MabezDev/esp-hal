@@ -512,11 +512,12 @@ jobs:
             fi
           done
 
-      - uses: actions/upload-artifact@v6
+      # One artifact per matrix chip: hil-tests-<soc>
+      - uses: ./.github/actions/upload-named-artifacts
         with:
-          name: hil-tests
-          path: target/tests/
-          if-no-files-found: error
+          matrix: ${{ steps.chips.outputs.matrix }}
+          prefix: hil-tests
+          require-any: "true"
 
       # Build radio HIL tests (hil-test-radio).  Chips for which the radio
       # package has no applicable binaries produce no output and are silently
@@ -535,11 +536,11 @@ jobs:
             fi
           done
 
-      - uses: actions/upload-artifact@v6
+      # One artifact per matrix chip: hil-tests-radio-<soc>
+      - uses: ./.github/actions/upload-named-artifacts
         with:
-          name: hil-tests-radio
-          path: target/tests/
-          if-no-files-found: ignore
+          matrix: ${{ steps.chips.outputs.matrix }}
+          prefix: hil-tests-radio
 
   hil-devtool:
     needs: calculate
@@ -590,8 +591,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: hil-tests
-          path: tests/
+          name: hil-tests-${{ matrix.target.soc }}
+          path: tests/${{ matrix.target.soc }}
         continue-on-error: true
 
       - uses: actions/download-artifact@v4
@@ -640,8 +641,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: hil-tests-radio
-          path: tests/
+          name: hil-tests-radio-${{ matrix.target.soc }}
+          path: tests/${{ matrix.target.soc }}
         continue-on-error: true
 
       - uses: actions/download-artifact@v4

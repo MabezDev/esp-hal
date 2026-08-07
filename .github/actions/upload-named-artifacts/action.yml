@@ -1,0 +1,45 @@
+name: Upload named artifacts
+description: >
+  Upload each { "name", "path" } as its own GitHub Actions artifact.
+  Pass either `artifacts` (JSON array) or `matrix` + `prefix` (chip matrix
+  from steps.chips.outputs.matrix → prefix-<soc> for each target).
+
+inputs:
+  artifacts:
+    description: 'JSON array of {"name","path"} (optional if matrix+prefix set)'
+    required: false
+    default: ""
+  matrix:
+    description: 'Chip matrix JSON {"target":[{"soc":"..."},...]} (optional if artifacts set)'
+    required: false
+    default: ""
+  prefix:
+    description: Artifact name prefix when using matrix (e.g. hil-tests)
+    required: false
+    default: ""
+  root:
+    description: Per-SoC directory root when using matrix
+    required: false
+    default: target/tests
+  continue-on-missing:
+    description: If true, missing/empty paths are skipped instead of failing
+    required: false
+    default: "true"
+  require-any:
+    description: If true, fail when zero artifacts were uploaded
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Upload each named artifact
+      shell: bash
+      env:
+        ARTIFACTS_JSON: ${{ inputs.artifacts }}
+        MATRIX_JSON: ${{ inputs.matrix }}
+        NAME_PREFIX: ${{ inputs.prefix }}
+        PATH_ROOT: ${{ inputs.root }}
+        CONTINUE_ON_MISSING: ${{ inputs.continue-on-missing }}
+        REQUIRE_ANY: ${{ inputs.require-any }}
+      run: node "${{ github.action_path }}/upload.mjs"

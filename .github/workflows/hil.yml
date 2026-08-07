@@ -181,13 +181,12 @@ jobs:
             fi
           done
 
-      - name: Upload hil-test artifacts
-        if: ${{ inputs.package != 'hil-test-radio' }}
-        uses: actions/upload-artifact@v6
+      # One artifact per matrix chip: hil-tests-<soc>
+      - if: ${{ inputs.package != 'hil-test-radio' }}
+        uses: ./.github/actions/upload-named-artifacts
         with:
-          name: hil-tests
-          path: target/tests/
-          if-no-files-found: warn
+          matrix: ${{ steps.chips.outputs.matrix }}
+          prefix: hil-tests
 
       # Build hil-test-radio ELFs (unless the dispatch asked for hil-test
       # only).  Chips for which the radio package has no applicable binaries
@@ -211,13 +210,12 @@ jobs:
             fi
           done
 
-      - name: Upload hil-test-radio artifacts
-        if: ${{ inputs.package != 'hil-test' }}
-        uses: actions/upload-artifact@v6
+      # One artifact per matrix chip: hil-tests-radio-<soc>
+      - if: ${{ inputs.package != 'hil-test' }}
+        uses: ./.github/actions/upload-named-artifacts
         with:
-          name: hil-tests-radio
-          path: target/tests/
-          if-no-files-found: ignore
+          matrix: ${{ steps.chips.outputs.matrix }}
+          prefix: hil-tests-radio
 
   devtool:
     runs-on: ubuntu-latest
@@ -274,8 +272,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: hil-tests
-          path: tests/
+          name: hil-tests-${{ matrix.target.soc }}
+          path: tests/${{ matrix.target.soc }}
         continue-on-error: true
 
       - uses: actions/download-artifact@v4
@@ -333,8 +331,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: hil-tests-radio
-          path: tests/
+          name: hil-tests-radio-${{ matrix.target.soc }}
+          path: tests/${{ matrix.target.soc }}
         continue-on-error: true
 
       - uses: actions/download-artifact@v4
