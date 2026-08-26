@@ -3,14 +3,13 @@ use std::{path::Path, process::Command};
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use strum::IntoEnumIterator;
-use toml_edit::{Item, Value};
 
 use crate::{
     cargo::CargoToml,
     commands::{
         VersionBump,
         checker::generate_baseline,
-        release::plan::{PackagePlan, Plan},
+        release::plan::{PackagePlan, Plan, validate_release_closure},
         update_package,
     },
     git::{current_branch, ensure_workspace_clean, get_remote_name_for},
@@ -61,6 +60,17 @@ pub fn execute_plan(workspace: &Path, args: ApplyPlanArgs) -> Result<()> {
             plan.packages[0].bump
         );
     }
+
+    // Guard against a plan that has been hand-edited into an inconsistent state
+    // (e.g. a load-bearing crate removed while its dependents stay). This
+    // catches the case where a released crate would pull in a frozen dependency
+    // that requires an incompatible version of another crate being released.
+    let releasing = plan
+        .packages
+        .iter()
+        .map(|step| (step.package, step.new_version.clone()))
+        .collect();
+    validate_release_closure(workspace, &releasing)?;
 
     // Preflight: load and validate every package up front, before touching any
     // files, so a mismatched version or other plan error aborts without leaving

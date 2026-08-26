@@ -778,6 +778,45 @@ impl CargoToml {
         dependencies
     }
 
+    /// Returns each in-repo dependency together with the version requirement
+    /// string declared for it, across every dependency section (normal, dev,
+    /// build, and target-specific).
+    ///
+    /// Dependencies without a `version` (e.g. git-only) are skipped, and
+    /// renamed dependencies (`alias = { package = "real-name" }`) resolve to
+    /// the real crate. The same crate may appear more than once when it is
+    /// depended on from multiple sections.
+    pub fn repo_dependency_requirements(&mut self) -> Vec<(Package, String)> {
+        let mut dependencies = Vec::new();
+        self.visit_dependencies(|_, _, table| {
+            for (key, value) in table.iter() {
+                let (name, version) = match value {
+                    // package = "version"
+                    Item::Value(Value::String(version)) => (key, Some(version.value().to_string())),
+                    // package = { version = "version", package = "real-name" }
+                    Item::Value(Value::InlineTable(t)) => {
+                        let name = t.get("package").and_then(|p| p.as_str()).unwrap_or(key);
+                        let version = t.get("version").and_then(|v| v.as_str()).map(String::from);
+                        (name, version)
+                    }
+                    // [dependencies.package]
+                    // version = "version"
+                    Item::Table(t) => {
+                        let name = t.get("package").and_then(|p| p.as_str()).unwrap_or(key);
+                        let version = t.get("version").and_then(|v| v.as_str()).map(String::from);
+                        (name, version)
+                    }
+                    _ => (key, None),
+                };
+
+                if let (Ok(package), Some(version)) = (Package::from_str(name, true), version) {
+                    dependencies.push((package, version));
+                }
+            }
+        });
+        dependencies
+    }
+
     pub(crate) fn change_version_of_dependency(
         &mut self,
         package_name: &str,
