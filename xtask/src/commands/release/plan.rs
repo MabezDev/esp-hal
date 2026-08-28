@@ -542,11 +542,23 @@ fn related_crates(workspace: &Path, package: Package) -> Vec<Package> {
 }
 
 /// Build a map from each published, manifest-owning package to the published
-/// packages that depend on it (its in-repo dependents).
+/// packages that depend on it.
+///
+/// Only real (published) dependencies count — `dev-dependencies` are excluded
+/// (see [`CargoToml::repo_dependency_requirements`]) so that, for example, an
+/// `esp-radio` dev-dependency on `esp-rtos` does not make `esp-rtos` look
+/// private to `esp-radio`.
 fn build_dependents(workspace: &Path) -> Result<HashMap<Package, Vec<Package>>> {
     let mut dependents: HashMap<Package, Vec<Package>> = HashMap::new();
     for pkg in Package::iter().filter(|p| p.is_published() && !p.contains_standalone_projects()) {
-        for dep in CargoToml::new(workspace, pkg)?.repo_dependencies() {
+        let mut deps = CargoToml::new(workspace, pkg)?
+            .repo_dependency_requirements()
+            .into_iter()
+            .map(|(dep, _)| dep)
+            .collect::<Vec<_>>();
+        deps.sort();
+        deps.dedup();
+        for dep in deps {
             dependents.entry(dep).or_default().push(pkg);
         }
     }
@@ -557,10 +569,11 @@ fn build_dependents(workspace: &Path) -> Result<HashMap<Package, Vec<Package>>> 
 /// that becomes private to the excluded set (i.e. every published dependent of
 /// it has also been removed).
 ///
-/// Errors if an excluded (or pruned) package is still required by a package
-/// that remains in the plan — releasing the dependent while freezing the
-/// dependency would leave the published graph inconsistent. The error lists the
-/// dependents that would also need excluding.
+/// Consistency of what remains is not checked here: that is left to
+/// [`validate_release_closure`], which is called on the final plan. That way
+/// exclusions that stay version-compatible (e.g. releasing `esp-radio` while
+/// freezing `esp-phy`, which keeps depending on the already-published version)
+/// are allowed, and only genuine incompatibilities are rejected.
 fn apply_exclusions(
     workspace: &Path,
     plan_packages: &mut Vec<PackagePlan>,
@@ -582,33 +595,11 @@ fn apply_exclusions(
         }
     }
 
-    let removals = compute_exclusion_removals(&dependents, &in_plan, exclude);
-
-    if !removals.conflicts.is_empty() {
-        let mut lines = removals
-            .conflicts
-            .iter()
-            .map(|(removed, kept)| {
-                let list = kept
-                    .iter()
-                    .map(Package::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("  - {removed} is still required by: {list}")
-            })
-            .collect::<Vec<_>>();
-        lines.sort();
-        bail!(
-            "Cannot exclude the requested package(s); they are still required by packages that \
-             remain in the release plan:\n{}\n\nExclude those dependents as well, or keep the \
-             listed package in the release.",
-            lines.join("\n")
-        );
-    }
+    let removed = compute_exclusion_removals(&dependents, &in_plan, exclude);
 
     // Report what was dropped so the removal is visible.
     let explicit = exclude.iter().copied().collect::<HashSet<_>>();
-    let mut dropped = removals.removed.iter().copied().collect::<Vec<_>>();
+    let mut dropped = removed.iter().copied().collect::<Vec<_>>();
     dropped.sort();
     for pkg in &dropped {
         if explicit.contains(pkg) {
@@ -618,31 +609,20 @@ fn apply_exclusions(
         }
     }
 
-    plan_packages.retain(|p| !removals.removed.contains(&p.package));
+    plan_packages.retain(|p| !removed.contains(&p.package));
 
     Ok(())
 }
 
-/// The outcome of resolving `--exclude` against the release set.
-struct ExclusionRemovals {
-    /// Packages to drop: the explicitly excluded ones plus any that became
-    /// private to the excluded set.
-    removed: HashSet<Package>,
-    /// Removed packages that are still required by a package remaining in the
-    /// plan, paired with those still-present dependents. Non-empty means the
-    /// exclusion is unsafe.
-    conflicts: Vec<(Package, Vec<Package>)>,
-}
-
 /// Pure core of [`apply_exclusions`]: given the in-repo dependents map, the set
-/// of packages currently in the plan, and the packages to exclude, work out
-/// which packages to remove and whether any removal conflicts with a package
-/// that stays in the plan.
+/// of packages currently in the plan, and the packages to exclude, return the
+/// full set of packages to remove — the explicitly excluded ones plus any that
+/// become private to the excluded set.
 fn compute_exclusion_removals(
     dependents: &HashMap<Package, Vec<Package>>,
     in_plan: &HashSet<Package>,
     exclude: &[Package],
-) -> ExclusionRemovals {
+) -> HashSet<Package> {
     let mut kept = in_plan.clone();
     let mut removed = HashSet::new();
 
@@ -676,25 +656,7 @@ fn compute_exclusion_removals(
         }
     }
 
-    // A removed package must not still be required by a package that stays in
-    // the plan.
-    let conflicts = removed
-        .iter()
-        .filter_map(|r| {
-            let still_needed = dependents
-                .get(r)
-                .map(|qs| {
-                    qs.iter()
-                        .copied()
-                        .filter(|q| kept.contains(q))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            (!still_needed.is_empty()).then_some((*r, still_needed))
-        })
-        .collect::<Vec<_>>();
-
-    ExclusionRemovals { removed, conflicts }
+    removed
 }
 
 /// Validate that the set of packages being released forms a self-consistent
@@ -1038,10 +1000,12 @@ mod tests {
     }
 
     /// A forward dependency graph (with version requirements) modelled on the
-    /// real xtensa chain:
+    /// real xtensa/Wi-Fi chain. Dev-dependencies are excluded, matching the
+    /// real graph (notably esp-radio's dev-dependency on esp-rtos, which must
+    /// NOT make esp-rtos look private to esp-radio):
     /// ```text
-    /// esp-radio -> esp-hal, esp-phy, esp-radio-rtos-driver
-    /// esp-rtos  -> esp-hal, esp-radio-rtos-driver
+    /// esp-radio -> esp-hal, esp-phy, esp-radio-rtos-driver, esp-alloc
+    /// esp-rtos  -> esp-hal, esp-radio-rtos-driver, esp-alloc
     /// esp-hal   -> esp-sync, xtensa-lx
     /// esp-sync  -> xtensa-lx
     /// esp-phy   -> esp-sync
@@ -1054,6 +1018,7 @@ mod tests {
                     (Package::EspHal, "~1.2.0-rc.0".to_string()),
                     (Package::EspPhy, "0.2.0".to_string()),
                     (Package::EspRadioRtosDriver, "0.3.0".to_string()),
+                    (Package::EspAlloc, "0.10.0".to_string()),
                 ],
             ),
             (
@@ -1061,6 +1026,7 @@ mod tests {
                 vec![
                     (Package::EspHal, "~1.2.0-rc.0".to_string()),
                     (Package::EspRadioRtosDriver, "0.3.0".to_string()),
+                    (Package::EspAlloc, "0.10.0".to_string()),
                 ],
             ),
             (
@@ -1079,6 +1045,7 @@ mod tests {
                 vec![(Package::EspSync, "0.3.0".to_string())],
             ),
             (Package::EspRadioRtosDriver, vec![]),
+            (Package::EspAlloc, vec![]),
             (Package::XtensaLx, vec![]),
         ])
     }
@@ -1092,6 +1059,7 @@ mod tests {
                 Package::EspRadioRtosDriver,
                 vec![Package::EspRadio, Package::EspRtos],
             ),
+            (Package::EspAlloc, vec![Package::EspRadio, Package::EspRtos]),
             (Package::EspSync, vec![Package::EspHal, Package::EspPhy]),
             (Package::XtensaLx, vec![Package::EspHal, Package::EspSync]),
         ])
@@ -1105,6 +1073,7 @@ mod tests {
             Package::EspSync,
             Package::EspPhy,
             Package::EspRadioRtosDriver,
+            Package::EspAlloc,
             Package::XtensaLx,
         ]
         .into_iter()
@@ -1121,6 +1090,7 @@ mod tests {
             (Package::EspSync, ver("0.4.0")),
             (Package::EspPhy, ver("0.3.0")),
             (Package::EspRadioRtosDriver, ver("0.4.0")),
+            (Package::EspAlloc, ver("0.11.0")),
             (Package::XtensaLx, ver("0.14.0")),
         ]);
         assert!(release_closure_violations(&xtensa_deps_of(), &releasing).is_empty());
@@ -1135,6 +1105,7 @@ mod tests {
             (Package::EspHal, ver("1.2.0-rc.1")),
             (Package::EspSync, ver("0.4.0")),
             (Package::EspRadioRtosDriver, ver("0.4.0")),
+            (Package::EspAlloc, ver("0.11.0")),
             (Package::XtensaLx, ver("0.14.0")),
         ]);
         assert!(release_closure_violations(&xtensa_deps_of(), &releasing).is_empty());
@@ -1159,21 +1130,17 @@ mod tests {
     }
 
     #[test]
-    fn exclusion_radio_prunes_phy_without_conflict() {
-        let removals = compute_exclusion_removals(
+    fn exclusion_radio_prunes_only_phy() {
+        // Excluding esp-radio drops its genuinely-private esp-phy, but keeps
+        // esp-rtos, esp-alloc and esp-radio-rtos-driver: those are used beyond
+        // esp-radio (and esp-radio's dev-dependency on esp-rtos is not counted).
+        let removed = compute_exclusion_removals(
             &xtensa_dependents(),
             &full_release_set(),
             &[Package::EspRadio],
         );
-
-        assert!(
-            removals.conflicts.is_empty(),
-            "unexpected conflicts: {:?}",
-            removals.conflicts
-        );
-        // esp-phy is private to esp-radio, so it is pruned too; nothing else is.
         assert_eq!(
-            removals.removed,
+            removed,
             [Package::EspRadio, Package::EspPhy]
                 .into_iter()
                 .collect::<HashSet<_>>()
@@ -1181,22 +1148,50 @@ mod tests {
     }
 
     #[test]
-    fn exclusion_esp_hal_conflicts_with_dependents() {
-        let removals = compute_exclusion_removals(
+    fn exclusion_esp_hal_removes_only_esp_hal() {
+        // esp-hal keeps dependents that stay in the plan, so nothing is
+        // auto-pruned. Whether freezing esp-hal is *safe* is left to the
+        // closure check, not decided here.
+        let removed = compute_exclusion_removals(
             &xtensa_dependents(),
             &full_release_set(),
             &[Package::EspHal],
         );
+        assert_eq!(
+            removed,
+            [Package::EspHal].into_iter().collect::<HashSet<_>>()
+        );
+    }
 
-        let conflicting: HashSet<Package> = removals.conflicts.iter().map(|(p, _)| *p).collect();
-        assert!(conflicting.contains(&Package::EspHal));
+    #[test]
+    fn closure_releasing_radio_over_frozen_lower_stack_is_ok() {
+        // Release esp-radio while freezing esp-phy and the whole lower stack:
+        // esp-radio keeps depending on the already-published versions, which is
+        // consistent because none of those frozen crates' deps are bumped.
+        let releasing = HashMap::from([
+            (Package::EspRadio, ver("1.0.0-beta.1")),
+            (Package::EspRtos, ver("0.4.0")),
+            (Package::EspRadioRtosDriver, ver("0.4.0")),
+            (Package::EspAlloc, ver("0.11.0")),
+        ]);
+        assert!(release_closure_violations(&xtensa_deps_of(), &releasing).is_empty());
+    }
 
-        let still_needed_by: HashSet<Package> = removals
-            .conflicts
-            .iter()
-            .flat_map(|(_, qs)| qs.iter().copied())
-            .collect();
-        assert!(still_needed_by.contains(&Package::EspRtos));
-        assert!(still_needed_by.contains(&Package::EspRadio));
+    #[test]
+    fn closure_freezing_esp_phy_while_bumping_esp_sync_is_rejected() {
+        // Bump esp-sync but freeze esp-phy: released esp-radio pulls the frozen
+        // esp-phy (which still requires esp-sync 0.3) alongside the new esp-sync
+        // 0.4.
+        let releasing = HashMap::from([
+            (Package::EspRadio, ver("1.0.0-beta.1")),
+            (Package::EspSync, ver("0.4.0")),
+        ]);
+        let violations = release_closure_violations(&xtensa_deps_of(), &releasing);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("esp-phy") && v.contains("esp-sync")),
+            "expected an esp-phy/esp-sync violation, got: {violations:?}"
+        );
     }
 }

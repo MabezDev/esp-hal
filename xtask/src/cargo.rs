@@ -779,8 +779,14 @@ impl CargoToml {
     }
 
     /// Returns each in-repo dependency together with the version requirement
-    /// string declared for it, across every dependency section (normal, dev,
-    /// build, and target-specific).
+    /// string declared for it, across the normal, build, and target-specific
+    /// dependency sections.
+    ///
+    /// `dev-dependencies` are deliberately excluded: they are not part of the
+    /// published crate, so they neither pull a crate into a released crate's
+    /// dependency tree nor constrain what downstream users resolve. Counting
+    /// them would, for example, make `esp-rtos` (an `esp-radio` dev-dependency)
+    /// look like it exists only to serve `esp-radio`.
     ///
     /// Dependencies without a `version` (e.g. git-only) are skipped, and
     /// renamed dependencies (`alias = { package = "real-name" }`) resolve to
@@ -788,7 +794,10 @@ impl CargoToml {
     /// depended on from multiple sections.
     pub fn repo_dependency_requirements(&mut self) -> Vec<(Package, String)> {
         let mut dependencies = Vec::new();
-        self.visit_dependencies(|_, _, table| {
+        self.visit_dependencies(|_, dependency_kind, table| {
+            if dependency_kind == "dev-dependencies" {
+                return;
+            }
             for (key, value) in table.iter() {
                 let (name, version) = match value {
                     // package = "version"
@@ -971,6 +980,47 @@ mod tests {
                 "previous={previous}, new={new}"
             );
         }
+    }
+
+    #[test]
+    fn repo_dependency_requirements_excludes_dev_dependencies() {
+        // A dev-dependency (esp-radio -> esp-rtos in reality) must not be
+        // reported as a release dependency; normal and build dependencies are.
+        let manifest = r#"
+            [package]
+            name = "esp-radio"
+            version = "1.0.0"
+
+            [dependencies]
+            esp-hal = { version = "1.2.0", path = "../esp-hal" }
+
+            [build-dependencies]
+            esp-config = { version = "0.8.0", path = "../esp-config" }
+
+            [dev-dependencies]
+            esp-rtos = { version = "0.3.0", path = "../esp-rtos" }
+        "#;
+
+        let mut toml =
+            CargoToml::from_str(&std::path::PathBuf::new(), Package::EspRadio, manifest).unwrap();
+        let deps = toml
+            .repo_dependency_requirements()
+            .into_iter()
+            .map(|(pkg, _)| pkg)
+            .collect::<Vec<_>>();
+
+        assert!(
+            deps.contains(&Package::EspHal),
+            "normal dep missing: {deps:?}"
+        );
+        assert!(
+            deps.contains(&Package::EspConfig),
+            "build dep missing: {deps:?}"
+        );
+        assert!(
+            !deps.contains(&Package::EspRtos),
+            "dev dep should be excluded: {deps:?}"
+        );
     }
 
     #[test]
