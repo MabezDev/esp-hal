@@ -758,14 +758,27 @@ pub(super) fn generate_changelog_draft(workspace: &Path, plan: &Plan) -> Vec<std
         return vec![];
     }
 
-    // Use the oldest last-release tag as the baseline so we don't miss entries
-    // for packages that were last released earlier than others.
-    let since_ref = plan
+    // Oldest last-release tag among the crates that actually keep a changelog,
+    // so we don't miss entries for a crate last released earlier than others.
+    // Changelog-exempt crates (e.g. esp-metadata-generated) carry no entries,
+    // and their tag - often far older - would otherwise widen the window and
+    // re-collect entries already shipped for the other crates.
+    let is_changelog_exempt = |package: Package| {
+        CargoToml::new(workspace, package)
+            .ok()
+            .and_then(|toml| toml.espressif_metadata_bool("changelog-exempt"))
+            .unwrap_or(false)
+    };
+    let Some(since_ref) = plan
         .packages
         .iter()
+        .filter(|pkg| !is_changelog_exempt(pkg.package))
         .map(|pkg| pkg.package.tag(&pkg.current_version))
         .min_by_key(|tag| tag_commit_timestamp(workspace, tag))
-        .expect("packages is non-empty");
+    else {
+        // Every released crate is changelog-exempt: nothing to harvest.
+        return vec![];
+    };
 
     // Map crate name → PackagePlan for quick lookup.
     let pkg_by_crate: HashMap<String, &PackagePlan> = plan
