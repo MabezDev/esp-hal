@@ -652,26 +652,33 @@ fn compute_exclusion_removals(
 /// Guards against a "diamond": a crate that is *not* being released lands in a
 /// released crate's dependency tree while requiring an incompatible version of
 /// another crate that *is* being released. Classic case: releasing a breaking
-/// `xtensa-lx 0.13 -> 0.14` without `esp-hal`, so anything depending on the
-/// frozen `esp-hal` pulls `xtensa-lx 0.13` alongside the new `0.14`.
+/// `esp-rom-sys 0.1 -> 0.2` without `esp-hal`, so anything depending on the
+/// frozen `esp-hal` pulls the old `esp-rom-sys` alongside the new one - and
+/// because `esp-rom-sys` sets `links`, cargo refuses two versions in one graph.
 ///
 /// `releasing` maps each released package to its new version. Released packages
 /// are skipped as violation sources: the tooling rewrites their requirements to
 /// the new versions anyway.
+///
+/// Crates without a `links` key are also skipped: cargo lets several of their
+/// versions coexist in one build, so a frozen consumer holding an older one is
+/// harmless.
 pub fn validate_release_closure(
     workspace: &Path,
     releasing: &HashMap<Package, semver::Version>,
 ) -> Result<()> {
     // Forward in-repo dependency graph, keeping each edge's version requirement.
     let mut deps_of: HashMap<Package, Vec<(Package, String)>> = HashMap::new();
+    let mut duplication_safe: HashSet<Package> = HashSet::new();
     for pkg in Package::iter().filter(|p| !p.contains_standalone_projects()) {
-        deps_of.insert(
-            pkg,
-            CargoToml::new(workspace, pkg)?.repo_dependency_requirements(),
-        );
+        let mut toml = CargoToml::new(workspace, pkg)?;
+        if !toml.has_links() {
+            duplication_safe.insert(pkg);
+        }
+        deps_of.insert(pkg, toml.repo_dependency_requirements());
     }
 
-    let violations = release_closure_violations(&deps_of, releasing);
+    let violations = release_closure_violations(&deps_of, releasing, &duplication_safe);
     if !violations.is_empty() {
         bail!(
             "The release plan is not self-consistent. The following crates are not being \
@@ -687,12 +694,14 @@ pub fn validate_release_closure(
 }
 
 /// Pure core of [`validate_release_closure`]: given the forward dependency
-/// graph (each edge carrying its version requirement) and the packages being
-/// released (with their new versions), return the sorted list of consistency
+/// graph (each edge carrying its version requirement), the packages being
+/// released (with their new versions), and the set of crates whose versions may
+/// safely coexist in one build, return the sorted list of consistency
 /// violations. An empty result means the release is self-consistent.
 fn release_closure_violations(
     deps_of: &HashMap<Package, Vec<(Package, String)>>,
     releasing: &HashMap<Package, semver::Version>,
+    duplication_safe: &HashSet<Package>,
 ) -> Vec<String> {
     // Everything reachable (downward) from the released packages, i.e. what
     // will actually be pulled into a released crate's build.
@@ -717,6 +726,10 @@ fn release_closure_violations(
             let Some(new_version) = releasing.get(dep) else {
                 continue;
             };
+            // A duplication-safe crate may coexist at several versions in one build.
+            if duplication_safe.contains(dep) {
+                continue;
+            }
             let accepted = VersionReq::parse(req)
                 .map(|r| r.matches(new_version))
                 .unwrap_or(false);
@@ -1075,7 +1088,9 @@ mod tests {
             (Package::EspAlloc, ver("0.11.0")),
             (Package::XtensaLx, ver("0.14.0")),
         ]);
-        assert!(release_closure_violations(&xtensa_deps_of(), &releasing).is_empty());
+        assert!(
+            release_closure_violations(&xtensa_deps_of(), &releasing, &HashSet::new()).is_empty()
+        );
     }
 
     #[test]
@@ -1090,7 +1105,9 @@ mod tests {
             (Package::EspAlloc, ver("0.11.0")),
             (Package::XtensaLx, ver("0.14.0")),
         ]);
-        assert!(release_closure_violations(&xtensa_deps_of(), &releasing).is_empty());
+        assert!(
+            release_closure_violations(&xtensa_deps_of(), &releasing, &HashSet::new()).is_empty()
+        );
     }
 
     #[test]
@@ -1102,7 +1119,7 @@ mod tests {
             (Package::EspSync, ver("0.4.0")),
             (Package::EspRtos, ver("0.4.0")),
         ]);
-        let violations = release_closure_violations(&xtensa_deps_of(), &releasing);
+        let violations = release_closure_violations(&xtensa_deps_of(), &releasing, &HashSet::new());
         assert!(
             violations
                 .iter()
@@ -1156,7 +1173,9 @@ mod tests {
             (Package::EspRadioRtosDriver, ver("0.4.0")),
             (Package::EspAlloc, ver("0.11.0")),
         ]);
-        assert!(release_closure_violations(&xtensa_deps_of(), &releasing).is_empty());
+        assert!(
+            release_closure_violations(&xtensa_deps_of(), &releasing, &HashSet::new()).is_empty()
+        );
     }
 
     #[test]
@@ -1168,12 +1187,60 @@ mod tests {
             (Package::EspRadio, ver("1.0.0-beta.1")),
             (Package::EspSync, ver("0.4.0")),
         ]);
-        let violations = release_closure_violations(&xtensa_deps_of(), &releasing);
+        let violations = release_closure_violations(&xtensa_deps_of(), &releasing, &HashSet::new());
         assert!(
             violations
                 .iter()
                 .any(|v| v.contains("esp-phy") && v.contains("esp-sync")),
             "expected an esp-phy/esp-sync violation, got: {violations:?}"
+        );
+    }
+
+    /// A frozen consumer requiring an older esp-metadata-generated while a newer
+    /// one is released. Flagged without the exemption, allowed with it.
+    fn metadata_deps_of() -> HashMap<Package, Vec<(Package, String)>> {
+        HashMap::from([
+            (
+                Package::EspRadio,
+                vec![
+                    (Package::EspHal, "~1.2.0".to_string()),
+                    (Package::EspMetadataGenerated, "0.5.1".to_string()),
+                ],
+            ),
+            (
+                Package::EspHal,
+                vec![(Package::EspMetadataGenerated, "0.5.1".to_string())],
+            ),
+            (Package::EspMetadataGenerated, vec![]),
+        ])
+    }
+
+    #[test]
+    fn closure_frozen_metadata_consumer_is_rejected_without_exemption() {
+        let releasing = HashMap::from([
+            (Package::EspRadio, ver("1.0.0-beta.2")),
+            (Package::EspMetadataGenerated, ver("0.6.0")),
+        ]);
+        let violations =
+            release_closure_violations(&metadata_deps_of(), &releasing, &HashSet::new());
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("esp-hal") && v.contains("esp-metadata-generated")),
+            "expected an esp-hal/esp-metadata-generated violation, got: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn closure_duplication_safe_metadata_is_allowed() {
+        let releasing = HashMap::from([
+            (Package::EspRadio, ver("1.0.0-beta.2")),
+            (Package::EspMetadataGenerated, ver("0.6.0")),
+        ]);
+        let duplication_safe = HashSet::from([Package::EspMetadataGenerated]);
+        assert!(
+            release_closure_violations(&metadata_deps_of(), &releasing, &duplication_safe)
+                .is_empty()
         );
     }
 }

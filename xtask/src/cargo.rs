@@ -633,6 +633,16 @@ impl CargoToml {
             })
     }
 
+    /// Whether the package declares a `links` key. Cargo allows only one crate
+    /// with a given `links` value per dependency graph, so a crate without one
+    /// can appear at several versions in the same build.
+    pub fn has_links(&self) -> bool {
+        self.manifest
+            .get("package")
+            .and_then(|package| package.get("links"))
+            .is_some()
+    }
+
     /// Create a `CargoToml` instance from a manifest string.
     pub fn from_str(workspace: &Path, package: Package, manifest: &str) -> Result<Self> {
         // Parse the manifest string into a mutable TOML document.
@@ -1017,6 +1027,33 @@ mod tests {
         assert!(
             !deps.contains(&Package::EspRtos),
             "dev dep should be excluded: {deps:?}"
+        );
+    }
+
+    #[test]
+    fn has_links_detects_links_key() {
+        let with_links = r#"
+            [package]
+            name = "esp-rom-sys"
+            version = "0.1.5"
+            links = "esp_rom_sys"
+        "#;
+        let without_links = r#"
+            [package]
+            name = "esp-metadata-generated"
+            version = "0.5.1"
+        "#;
+
+        let path = std::path::PathBuf::new();
+        assert!(
+            CargoToml::from_str(&path, Package::EspRomSys, with_links)
+                .unwrap()
+                .has_links()
+        );
+        assert!(
+            !CargoToml::from_str(&path, Package::EspMetadataGenerated, without_links)
+                .unwrap()
+                .has_links()
         );
     }
 
