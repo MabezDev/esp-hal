@@ -633,6 +633,21 @@ impl CargoToml {
             })
     }
 
+    /// Load and parse the Cargo.toml for `package` as it existed at `git_ref`.
+    ///
+    /// Reads the manifest via `git show <ref>:<path>` so a frozen crate's
+    /// requirements come from its release tag rather than the working tree,
+    /// which `bump_crate_version` rewrites for every workspace crate regardless
+    /// of whether it is in the plan.
+    pub fn at_ref(workspace: &Path, package: Package, git_ref: &str) -> Result<Self> {
+        let repo_relative = format!("{}/Cargo.toml", package.directory());
+        let manifest = crate::git::show_file_at_ref(workspace, git_ref, &repo_relative)
+            .with_context(|| {
+                format!("Failed to read {repo_relative} at {git_ref} for package {package}")
+            })?;
+        Self::from_str(workspace, package, &manifest)
+    }
+
     /// Create a `CargoToml` instance from a manifest string.
     pub fn from_str(workspace: &Path, package: Package, manifest: &str) -> Result<Self> {
         // Parse the manifest string into a mutable TOML document.
@@ -820,6 +835,50 @@ impl CargoToml {
                 }
             }
         });
+        dependencies
+    }
+
+    /// Every dependency requirement as a `(name, version requirement)` pair,
+    /// across the normal, build, and target-specific sections.
+    ///
+    /// `dev-dependencies` are excluded: they are not part of the published
+    /// crate, so they never reach a downstream user's dependency tree. Renamed
+    /// dependencies (`alias = { package = "real-name" }`) resolve to the real
+    /// crate name. Dependencies without a `version` (e.g. git-only) are skipped.
+    ///
+    /// The result is sorted, so two manifests can be compared for drift by
+    /// comparing the returned vectors directly.
+    pub fn dependency_requirements(&mut self) -> Vec<(String, String)> {
+        let mut dependencies = Vec::new();
+        self.visit_dependencies(|_, dependency_kind, table| {
+            if dependency_kind == "dev-dependencies" {
+                return;
+            }
+            for (key, value) in table.iter() {
+                let (name, version) = match value {
+                    Item::Value(Value::String(version)) => {
+                        (key, Some(version.value().to_string()))
+                    }
+                    Item::Value(Value::InlineTable(t)) => {
+                        let name = t.get("package").and_then(|p| p.as_str()).unwrap_or(key);
+                        let version = t.get("version").and_then(|v| v.as_str()).map(String::from);
+                        (name, version)
+                    }
+                    Item::Table(t) => {
+                        let name = t.get("package").and_then(|p| p.as_str()).unwrap_or(key);
+                        let version = t.get("version").and_then(|v| v.as_str()).map(String::from);
+                        (name, version)
+                    }
+                    _ => (key, None),
+                };
+
+                if let Some(version) = version {
+                    dependencies.push((name.to_string(), version));
+                }
+            }
+        });
+        dependencies.sort();
+        dependencies.dedup();
         dependencies
     }
 
