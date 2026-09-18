@@ -493,9 +493,10 @@ fn parse_chips_from_annotation(
 ///   `[package.metadata.espressif]`. Their chip set is derived from device metadata via the `if`
 ///   predicate, and the per-chip cargo feature is carried entirely by forwarded `<dep>/<chip>`
 ///   features - no bare chip feature.
-/// - Legacy standalone projects (e.g. `examples/async/embassy_ethernet`) declare one `[features]`
-///   key per supported chip. Their chip set is those keys, optionally narrowed by a `//%
-///   CHIP_FILTER` annotation.
+/// - Self-contained projects (e.g. `examples/async/embassy_ethernet`), each buildable on its own
+///   and meant to be copied elsewhere as a starting point, declare one `[features]` key per
+///   supported chip. Their chip set is those keys, optionally narrowed by a `//% CHIP_FILTER`
+///   annotation.
 pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
     let mut examples = Vec::new();
 
@@ -625,8 +626,8 @@ impl CompileTestManifest {
 
 /// Parse the `compile-test` metadata table from a project manifest.
 ///
-/// Returns `Ok(None)` when the project has no such table, which is what routes a
-/// legacy `[features]`-key project through the other branch of `load_cargo_toml`.
+/// Returns `Ok(None)` when the project has no such table, routing a
+/// `[features]`-key project through the other branch of `load_cargo_toml`.
 fn parse_compile_test_metadata(toml_str: &str) -> Result<Option<CompileTestManifest>> {
     let doc = toml_str
         .parse::<DocumentMut>()
@@ -1107,10 +1108,10 @@ mod tests {
     }
 
     #[test]
-    fn contradictory_predicate_selects_no_chip() {
+    fn false_predicate_selects_no_chip() {
         // A predicate no chip satisfies yields an empty set; the build path turns
         // this into a hard zero-coverage error.
-        assert!(chips("wifi_driver_supported && !wifi_driver_supported").is_empty());
+        assert!(chips("false").is_empty());
     }
 
     #[test]
@@ -1147,12 +1148,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_features_manifest_has_no_compile_test_table() {
-        // A standalone example still keyed off `[features]` must route through the
-        // legacy branch (parse returns None).
+    fn features_key_manifest_has_no_compile_test_table() {
+        // A project keyed off `[features]` routes through the other branch of
+        // load_cargo_toml (parse returns None).
         let manifest = r#"
             [package]
-            name = "legacy"
+            name = "standalone"
             version = "0.0.0"
 
             [features]

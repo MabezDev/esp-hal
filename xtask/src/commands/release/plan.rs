@@ -1428,13 +1428,11 @@ mod tests {
     }
 
     #[test]
-    fn replay_6341_refuses_emg_without_its_dependents() {
-        // esp-metadata-generated 0.6.0 + esp-radio beta.2, with esp-hal and
-        // esp-config frozen at requirements of ^0.5. Both must reject 0.6.0.
-        let releasing = HashMap::from([
-            (Package::EspMetadataGenerated, ver("0.6.0")),
-            (Package::EspRadio, ver("1.0.0-beta.2")),
-        ]);
+    fn releasing_emg_alone_is_refused_by_frozen_dependents() {
+        // #6341: bumping esp-metadata-generated to 0.6.0 while esp-hal and
+        // esp-config stay frozen at ^0.5 must be refused, since their published
+        // manifests reject 0.6.0.
+        let releasing = HashMap::from([(Package::EspMetadataGenerated, ver("0.6.0"))]);
         let frozen = frozen_reqs_from(&emg_deps_of(), &releasing);
         let violations = release_closure_violations(&frozen, &releasing);
         assert!(
@@ -1452,12 +1450,11 @@ mod tests {
     }
 
     #[test]
-    fn replay_6341_accepts_emg_with_its_dependents() {
-        // Adding esp-hal and esp-config to the plan makes them no longer frozen,
-        // so nothing constrains esp-metadata-generated.
+    fn releasing_emg_with_its_dependents_is_accepted() {
+        // Adding esp-hal and esp-config to the plan unfreezes them, so nothing
+        // constrains esp-metadata-generated.
         let releasing = HashMap::from([
             (Package::EspMetadataGenerated, ver("0.6.0")),
-            (Package::EspRadio, ver("1.0.0-beta.2")),
             (Package::EspConfig, ver("0.9.0")),
             (Package::EspHal, ver("1.3.0")),
         ]);
@@ -1516,6 +1513,9 @@ mod tests {
 
     #[test]
     fn stale_dependency_warnings_group_by_package() {
+        // #6334 (esp-radio beta.1): esp-radio is released against a frozen
+        // esp-metadata-generated 0.5.1 that has commits since its tag (the S31
+        // Wi-Fi metadata), so the planner warns rather than refusing.
         let warnings = vec![
             StaleDependency {
                 package: Package::EspRadio,

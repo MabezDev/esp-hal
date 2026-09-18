@@ -736,7 +736,7 @@ pub fn generate_build_command(
     };
 
     // Enable the bare chip feature only when the manifest declares it. Host
-    // packages and legacy standalone projects have one feature per chip;
+    // packages and self-contained projects have one feature per chip;
     // metadata-driven compile-test projects carry the chip through forwarded
     // `<dep>/<chip>` features and have none, so pushing it would fail.
     let push_chip_feature = !standalone_project
