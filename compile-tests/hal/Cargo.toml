@@ -1,14 +1,13 @@
 [package]
-name    = "bare-hal"
+name    = "hal"
 version = "0.0.0"
 edition = "2024"
 publish = false
 
-# bare-hal exists to cover every chip, including the newest (esp32p4, esp32s31).
-# Those chips only gained support in esp-hal 1.2 / esp-backtrace 0.20 /
-# esp-bootloader-esp-idf 0.6 / esp-println 0.18, so the requirements track those
-# current lines rather than the older lines the wifi/ble projects pin. The line
-# (caret) form follows later releases within each minor line.
+# Covers every chip, including the newest (esp32p4, esp32s31). Those only gained
+# support in esp-hal 1.2 / esp-backtrace 0.20 / esp-bootloader-esp-idf 0.6 /
+# esp-println 0.18, so the pins track those current lines rather than the older
+# ones the wifi/ble projects use.
 [dependencies]
 esp-hal = { version = "1.2" }
 esp-backtrace = { version = "0.20", features = [
