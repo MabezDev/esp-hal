@@ -73,19 +73,11 @@ jobs:
           cargo xrel-check update
           cargo xrel-check replace-path-deps
 
-      # Build the compile-tests against the local registry. This is the cheap
-      # smoke test, so it runs on every release PR. Each chip uses the
-      # `ci-toolchain` recorded for it in chips.json.
+      # Build the compile-tests against the local registry. xtask derives the
+      # project-by-chip matrix from each project's metadata (and the toolchain
+      # per chip), so there is no fixed chip set to keep in sync here.
       - name: try-build [compile-tests]
-        shell: bash
-        run: |
-          for soc in $(jq -r '.[].soc' .github/chips.json); do
-            toolchain=$(jq -r --arg s "$soc" \
-              '.[] | select(.soc == $s) | ."ci-toolchain"' .github/chips.json)
-            echo "::group::compile-tests $soc ($toolchain)"
-            cargo xtask build compile-tests all "$soc" --toolchain "$toolchain"
-            echo "::endgroup::"
-          done
+        run: cargo xtask build compile-tests
 
       # Build the examples/qa/tests against the local registry. Runs by default;
       # add `release:registry:skip-ci` to the PR to opt out of this heavy check.
