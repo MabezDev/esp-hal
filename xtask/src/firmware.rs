@@ -921,8 +921,11 @@ mod tests {
     #[test]
     fn wifi_predicate_selects_wifi_chips() {
         let selected = chips("wifi_driver_supported");
-        // esp32s31 is Wi-Fi capable; esp32h2 and esp32p4 are not.
+        // The wifi compile-test must cover both incident chips: esp32s31 (#6334,
+        // beta.1 shipped against emg lacking its Wi-Fi metadata) and esp32c5
+        // (Wi-Fi 6 metadata not exercised). esp32h2 and esp32p4 have no Wi-Fi.
         assert!(selected.contains(&Chip::Esp32s31));
+        assert!(selected.contains(&Chip::Esp32c5));
         assert!(!selected.contains(&Chip::Esp32h2));
         assert!(!selected.contains(&Chip::Esp32p4));
     }
@@ -1011,7 +1014,10 @@ mod tests {
 
     #[test]
     fn features_for_version_flags_missing_chip_feature() {
-        // The version that resolves is missing the required chip feature.
+        // The mechanism behind #6334 (beta.1) and new-chip coverage: the
+        // published version that resolves lacks the required chip feature, so the
+        // feature check can skip an old dependency line for that chip instead of
+        // failing the build.
         let body = concat!(
             r#"{"name":"dep","vers":"1.0.0","deps":[],"features":{"esp32":[]},"cksum":"a","yanked":false}"#,
             "\n",
@@ -1027,8 +1033,9 @@ mod tests {
 
     #[test]
     fn real_compile_tests_cover_every_chip() {
-        // Exercises the real manifests end to end: parses each project's
-        // compile-test table and derives its chip set from the live metadata.
+        // Exercises the real projects end to end: derives each one's chip set
+        // from its `//% CHIP_FILTER` against the live metadata, and asserts every
+        // chip is covered so no release chip is silently untested.
         let workspace = crate::repo_root_for_tests();
         let coverage = compile_test_coverage(&workspace).expect("coverage should compute");
 
