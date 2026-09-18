@@ -33,24 +33,16 @@ pub fn run_rel_check(args: RelCheckCmds) -> Result<()> {
     match args {
         RelCheckCmds::Init => init_rel_check()?,
         RelCheckCmds::Deinit => deinit_rel_check()?,
-        RelCheckCmds::Update => update(&load_plan()?)?,
-        RelCheckCmds::ReplacePathDeps => scrap_path_deps(&load_plan()?)?,
+        // CI writes release_plan.jsonc from the PR body before the check runs;
+        // locally it is left by `cargo xrelease execute-plan`.
+        RelCheckCmds::Update => update(&Plan::from_path(Path::new("release_plan.jsonc"))?)?,
+        RelCheckCmds::ReplacePathDeps => {
+            scrap_path_deps(&Plan::from_path(Path::new("release_plan.jsonc"))?)?
+        }
         RelCheckCmds::CheckRomSysPolicy => check_rom_sys_policy(Path::new("."))?,
     }
 
     Ok(())
-}
-
-/// Load the finalized `release_plan.jsonc`. CI writes it from the PR body before
-/// running the check; locally it is left by `cargo xrelease execute-plan`.
-fn load_plan() -> Result<Plan> {
-    let path = Path::new("release_plan.jsonc");
-    ensure!(
-        std::fs::metadata(path).is_ok_and(|m| m.len() > 0),
-        "release_plan.jsonc is missing or empty. In CI it is extracted from the release PR body; \
-         locally, run `cargo xrelease execute-plan` first."
-    );
-    Plan::from_path(path)
 }
 
 /// The version an `esp-*` path dependency is rewritten to: the plan's version

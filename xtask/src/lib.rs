@@ -740,7 +740,10 @@ pub fn generate_build_command(
     // metadata-driven compile-test projects carry the chip through forwarded
     // `<dep>/<chip>` features and have none, so pushing it would fail.
     let push_chip_feature = !standalone_project
-        || manifest_declares_feature(&cwd.join("Cargo.toml"), &chip.to_string());
+        || std::fs::read_to_string(cwd.join("Cargo.toml"))
+            .ok()
+            .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
+            .is_some_and(|doc| firmware::manifest_declares_feature(&doc, &chip.to_string()));
     if push_chip_feature {
         features.push(chip.to_string());
     }
@@ -826,19 +829,6 @@ pub fn generate_build_command(
 
 // ----------------------------------------------------------------------------
 // Helper Functions
-
-/// Whether a manifest's `[features]` table declares `feature`.
-fn manifest_declares_feature(manifest_path: &Path, feature: &str) -> bool {
-    std::fs::read_to_string(manifest_path)
-        .ok()
-        .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
-        .and_then(|doc| {
-            doc.get("features")
-                .and_then(Item::as_table)
-                .map(|table| table.contains_key(feature))
-        })
-        .unwrap_or(false)
-}
 
 /// Copy an entire directory recursively.
 // https://stackoverflow.com/a/65192210

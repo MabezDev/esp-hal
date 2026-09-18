@@ -237,17 +237,10 @@ fn parse_meta_line(line: &str) -> anyhow::Result<MetaLine> {
 /// Returns the chips selected by a `CHIP_FILTER` expression (a boolean expression over
 /// cfg symbols, key-value cfg symbols, and chip names, e.g. `cfg_symbol && !esp32`,
 /// `esp32c6 || esp32h2`, or `interrupt_controller != "clic"`).
-fn parse_chips(expr: &str) -> anyhow::Result<Vec<Chip>> {
-    let script_ctx = ScriptContext::new();
-
+fn parse_chips(expr: &str) -> Result<Vec<Chip>> {
     let mut chips = Vec::new();
     for chip in Chip::iter() {
-        let mut ctx = script_ctx.for_chip(chip);
-
-        let selected = ctx.evaluate(expr).map_err(|err| {
-            anyhow::anyhow!("{err:?}").context("Failed to evaluate chip expression")
-        })?;
-        if selected {
+        if chip_matches(chip, expr)? {
             chips.push(chip);
         }
     }
@@ -961,7 +954,7 @@ fn dependency_requirement(doc: &DocumentMut, dep: &str) -> Option<String> {
     None
 }
 
-fn manifest_declares_feature(manifest: &DocumentMut, feature: &str) -> bool {
+pub(crate) fn manifest_declares_feature(manifest: &DocumentMut, feature: &str) -> bool {
     manifest
         .get("features")
         .and_then(|f| f.as_table())
