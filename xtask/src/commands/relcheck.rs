@@ -33,16 +33,65 @@ pub fn run_rel_check(args: RelCheckCmds) -> Result<()> {
     match args {
         RelCheckCmds::Init => init_rel_check()?,
         RelCheckCmds::Deinit => deinit_rel_check()?,
-        // CI writes release_plan.jsonc from the PR body before the check runs;
-        // locally it is left by `cargo xrelease execute-plan`.
-        RelCheckCmds::Update => update(&Plan::from_path(Path::new("release_plan.jsonc"))?)?,
-        RelCheckCmds::ReplacePathDeps => {
-            scrap_path_deps(&Plan::from_path(Path::new("release_plan.jsonc"))?)?
-        }
+        RelCheckCmds::Update => update(&load_plan()?)?,
+        RelCheckCmds::ReplacePathDeps => scrap_path_deps(&load_plan()?)?,
         RelCheckCmds::CheckRomSysPolicy => check_rom_sys_policy(Path::new("."))?,
     }
 
     Ok(())
+}
+
+fn load_plan() -> Result<Plan> {
+    Plan::from_path(Path::new("release_plan.jsonc"))
+}
+
+/// In a GitHub `pull_request` run, write the release plan embedded in the PR
+/// body to release_plan.jsonc. A no-op elsewhere: local runs use the file
+/// `execute-plan` already wrote.
+fn download_release_plan() -> Result<()> {
+    let Some(pr) = std::env::var("GITHUB_REF")
+        .ok()
+        .and_then(|r| pr_number_from_ref(&r))
+    else {
+        return Ok(());
+    };
+
+    let repo = std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| crate::UPSTREAM_REPO.into());
+    let output = Command::new("gh")
+        .args(["pr", "view", &pr.to_string()])
+        .args(["--repo", &repo, "--json", "body", "-q", ".body"])
+        .output()
+        .context("Failed to run `gh pr view`")?;
+    ensure!(
+        output.status.success(),
+        "`gh pr view {pr}` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let plan = extract_jsonc_block(&body)
+        .with_context(|| format!("PR #{pr} body has no jsonc release-plan block"))?;
+    std::fs::write("release_plan.jsonc", plan).context("Failed to write release_plan.jsonc")
+}
+
+/// The PR number from a `refs/pull/<n>/merge` ref, if `git_ref` is one.
+fn pr_number_from_ref(git_ref: &str) -> Option<u64> {
+    git_ref
+        .strip_prefix("refs/pull/")?
+        .split('/')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// The contents of the first ```jsonc fenced block in `text`.
+fn extract_jsonc_block(text: &str) -> Option<String> {
+    let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
+    lines
+        .by_ref()
+        .find(|l| l.trim_start().starts_with("```jsonc"))?;
+    let block: Vec<&str> = lines.take_while(|l| l.trim() != "```").collect();
+    (!block.is_empty()).then(|| block.join("\n"))
 }
 
 /// The version an `esp-*` path dependency is rewritten to: the plan's version
@@ -202,6 +251,8 @@ fn init_rel_check() -> Result<()> {
         cmd.status()?;
         Ok(())
     }
+
+    download_release_plan()?;
 
     // cleanup
     if std::fs::exists("target/local-registry")? {

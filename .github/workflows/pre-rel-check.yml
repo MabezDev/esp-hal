@@ -3,11 +3,10 @@
 # We want to check if we can compile examples/tests after bumping the deps by using a local registry.
 # (i.e. if we will publish the right set of crates)
 #
-# The compile-test build runs on every release PR. The heavier examples/qa/tests build runs by
-# default and is skipped only when the PR carries the `release:registry:skip-ci` label.
-#
-# The chip list (and the toolchain each chip builds with) is read from `.github/chips.json`, the
-# same source the main CI uses, so adding a chip there is enough.
+# The compile-test build runs on every release PR; xtask derives its project-by-chip matrix from
+# each project's metadata. The heavier examples/qa/tests build runs by default (skipped by the
+# `release:registry:skip-ci` label) and loops the chips in `.github/chips.json`, the same source
+# the main CI uses.
 
 name: pre-release-checks
 
@@ -30,17 +29,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-
-      # A release PR embeds its plan in a ```jsonc block in the body. Extract it
-      # to release_plan.jsonc so every `xrel-check` step reads it from disk.
-      - name: extract-plan
-        if: ${{ github.event_name == 'pull_request' }}
-        shell: bash
-        run: |
-          gh pr view "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" --json body -q .body \
-            | tr -d '\r' \
-            | awk '/^```jsonc/{f=1;next} f&&/^```/{f=0} f' > release_plan.jsonc
 
       - uses: ./.github/actions/setup-toolchains
         with:
