@@ -2,6 +2,12 @@
 #
 # We want to check if we can compile examples/tests after bumping the deps by using a local registry.
 # (i.e. if we will publish the right set of crates)
+#
+# The compile-test build runs on every release PR. The heavier examples/qa/tests build runs by
+# default and is skipped only when the PR carries the `release:registry:skip-ci` label.
+#
+# The chip list (and the toolchain each chip builds with) is read from `.github/chips.json`, the
+# same source the main CI uses, so adding a chip there is enough.
 
 name: pre-release-checks
 
@@ -17,24 +23,49 @@ env:
 jobs:
   check:
     runs-on: macos-m1-self-hosted
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'release:registry:compile-test') || contains(github.event.pull_request.labels.*.name, 'release:registry:ci'))) }}
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
     steps:
       - uses: actions/checkout@v6
 
+      # A release PR embeds its plan in a ```jsonc block in the body; a
+      # workflow_dispatch run must carry a checked-in `release_plan.jsonc`.
+      # Anything else (an ordinary PR) has no plan, so the expensive registry
+      # build below is skipped and the job passes quickly.
+      - name: detect-plan
+        id: plan
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BODY=$(gh pr view "${{ github.event.pull_request.number }}" \
+              --repo "${{ github.repository }}" --json body -q .body || true)
+            if printf '%s' "$BODY" | grep -q '```jsonc'; then
+              echo "has_plan=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_plan=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ -f release_plan.jsonc ]; then
+            echo "has_plan=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_plan=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: ./.github/actions/setup-toolchains
+        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         with:
           xtensa: "true"
           riscv: "true"
 
       # Install the Rust nightly toolchain for RISC-V devices:
       - uses: ./.github/actions/setup-nightly
+        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         with:
           targets: all
           components: rust-src
           alias: "true"
 
       - name: Setup cargo-batch
+        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         run: |
           if ! command -v cargo-batch &> /dev/null; then
               cargo install --git https://github.com/embassy-rs/cargo-batch cargo --bin cargo-batch --locked --force
@@ -45,48 +76,51 @@ jobs:
       # which builds the `esp-metadata` tool - and that host tool cannot resolve
       # its dependencies (e.g. `prettyplease`) against the local registry.
       - name: warm-metadata-cache
+        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         run: cargo update-metadata
 
+      # The plan comes straight from the PR body via `--plan-from-pr`. A
+      # workflow_dispatch run has no PR number, so it falls back to the
+      # checked-in `release_plan.jsonc`.
       - name: init-local-registry
-        run: |
-          cargo xrel-check init
-          cargo xrel-check update
-          cargo xrel-check replace-path-deps
-
-      # Build the compile-tests against the local registry. This is the cheap smoke
-      # test, so it runs first. Gated on `release:registry:compile-test` so it can be
-      # run independently of the heavier CI build.
-      - name: try-build [compile-tests]
-        if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'release:registry:compile-test') }}
+        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         shell: bash
         run: |
-          cargo xtask build compile-tests all esp32 --toolchain esp
-          cargo xtask build compile-tests all esp32s2 --toolchain esp
-          cargo xtask build compile-tests all esp32s3 --toolchain esp
-          cargo xtask build compile-tests all esp32s31 --toolchain stable
-          cargo xtask build compile-tests all esp32c2 --toolchain stable
-          cargo xtask build compile-tests all esp32c3 --toolchain stable
-          cargo xtask build compile-tests all esp32c5 --toolchain stable
-          cargo xtask build compile-tests all esp32c6 --toolchain stable
-          cargo xtask build compile-tests all esp32c61 --toolchain stable
-          cargo xtask build compile-tests all esp32p4 --toolchain stable
-          cargo xtask build compile-tests all esp32h2 --toolchain stable
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PLAN_ARG="--plan-from-pr ${{ github.event.pull_request.number }}"
+          else
+            PLAN_ARG="--plan release_plan.jsonc"
+          fi
+          cargo xrel-check init
+          cargo xrel-check update $PLAN_ARG
+          cargo xrel-check replace-path-deps $PLAN_ARG
 
-      # Build the examples/qa/tests against the local registry. Gated on
-      # `release:registry:ci` so a release can opt out of this heavy check.
+      # Build the compile-tests against the local registry. This is the cheap
+      # smoke test, so it runs on every release PR. Each chip uses the
+      # `ci-toolchain` recorded for it in chips.json.
+      - name: try-build [compile-tests]
+        if: ${{ steps.plan.outputs.has_plan == 'true' }}
+        shell: bash
+        run: |
+          for soc in $(jq -r '.[].soc' .github/chips.json); do
+            toolchain=$(jq -r --arg s "$soc" \
+              '.[] | select(.soc == $s) | ."ci-toolchain"' .github/chips.json)
+            echo "::group::compile-tests $soc ($toolchain)"
+            cargo xtask build compile-tests all "$soc" --toolchain "$toolchain"
+            echo "::endgroup::"
+          done
+
+      # Build the examples/qa/tests against the local registry. Runs by default;
+      # add `release:registry:skip-ci` to the PR to opt out of this heavy check.
       - name: try-build [examples/qa/tests]
-        if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'release:registry:ci') }}
+        if: ${{ steps.plan.outputs.has_plan == 'true' && !contains(github.event.pull_request.labels.*.name, 'release:registry:skip-ci') }}
         shell: bash
         run: |
           # lints and docs are checked a couple of times already by other workflows
-          cargo xcheck ci esp32 --toolchain esp --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32s2 --toolchain esp --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32s3 --toolchain esp --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32s31 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32c2 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32c3 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32c5 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32c6 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32c61 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32p4 --toolchain stable --steps=lp-examples,examples,qa-test,tests
-          cargo xcheck ci esp32h2 --toolchain stable --steps=lp-examples,examples,qa-test,tests
+          for soc in $(jq -r '.[].soc' .github/chips.json); do
+            toolchain=$(jq -r --arg s "$soc" \
+              '.[] | select(.soc == $s) | ."ci-toolchain"' .github/chips.json)
+            echo "::group::examples/qa/tests $soc ($toolchain)"
+            cargo xcheck ci "$soc" --toolchain "$toolchain" --steps=lp-examples,examples,qa-test,tests
+            echo "::endgroup::"
+          done
