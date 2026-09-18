@@ -26,17 +26,10 @@ esp-println = { version = "0.17.0", features = ["log-04"] }
 esp-rtos = { version = "0.3.0", features = ["esp-radio", "embassy", "log-04"] }
 esp-radio = { version = "0.18.0", features = [
     "log-04",
-    "unstable",
     "wifi",
 ] }
 reqwless = { version = "0.14.0", default-features = false }
 static_cell = "2.1.0"
-
-# Chip selection is derived from device metadata: the project builds for every chip
-# whose `if` predicate holds, and the per-chip cargo feature is forwarded to each
-# `chip-deps` crate. Adding a new chip needs no edit here.
-[package.metadata.espressif]
-compile-test = { if = 'wifi_driver_supported', chip-deps = ["esp-hal", "esp-rtos", "esp-radio", "esp-backtrace", "esp-bootloader-esp-idf"], features = ["esp-radio/wifi"], append = [ { if = 'wifi_driver_supported && bt_driver_supported', features = ["esp-radio/coex"] } ] }
 
 [profile.release]
 debug            = true

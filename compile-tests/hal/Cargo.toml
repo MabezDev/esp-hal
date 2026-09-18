@@ -4,10 +4,8 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# Covers every chip, including the newest (esp32p4, esp32s31). Those only gained
-# support in esp-hal 1.2 / esp-backtrace 0.20 / esp-bootloader-esp-idf 0.6 /
-# esp-println 0.18, so the pins track those current lines rather than the older
-# ones the wifi/ble projects use.
+# Pins track the current lines: older ones predate esp32p4/esp32s31, which this
+# project must cover.
 [dependencies]
 esp-hal = { version = "1.2" }
 esp-backtrace = { version = "0.20", features = [
@@ -16,12 +14,6 @@ esp-backtrace = { version = "0.20", features = [
 ] }
 esp-bootloader-esp-idf = { version = "0.6" }
 esp-println = { version = "0.18" }
-
-# The `if = 'true'` predicate makes this the one project every chip selects, so
-# no chip (esp32p4 in particular) is ever left without a compile-test. Chip
-# selection and the forwarded `<dep>/<chip>` features come from device metadata.
-[package.metadata.espressif]
-compile-test = { if = 'true', chip-deps = ["esp-hal", "esp-backtrace", "esp-bootloader-esp-idf", "esp-println"] }
 
 [profile.release]
 debug            = true

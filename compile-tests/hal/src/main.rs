@@ -4,6 +4,8 @@
 #![no_std]
 #![no_main]
 
+//% CHIP_FILTER: true
+
 use esp_backtrace as _;
 use esp_hal::main;
 use esp_println as _;
