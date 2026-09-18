@@ -735,16 +735,10 @@ pub fn generate_build_command(
         package_path.to_path_buf()
     };
 
-    // Enable the bare chip feature only when the manifest declares it. Host
-    // packages and self-contained projects have one feature per chip;
-    // metadata-driven compile-test projects carry the chip through forwarded
-    // `<dep>/<chip>` features and have none, so pushing it would fail.
-    let push_chip_feature = !standalone_project
-        || std::fs::read_to_string(cwd.join("Cargo.toml"))
-            .ok()
-            .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
-            .is_some_and(|doc| firmware::manifest_declares_feature(&doc, &chip.to_string()));
-    if push_chip_feature {
+    // Host-package and self-contained builds enable the bare chip feature;
+    // metadata-driven compile-tests have no per-chip `[features]` table and carry
+    // the chip through forwarded `<dep>/<chip>` features, so it must not be added.
+    if !standalone_project || firmware::project_has_chip_feature_table(&cwd) {
         features.push(chip.to_string());
     }
 

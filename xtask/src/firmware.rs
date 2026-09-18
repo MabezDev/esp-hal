@@ -578,6 +578,16 @@ fn selected_chips(annotation: &Option<std::collections::HashSet<Chip>>) -> Vec<C
     }
 }
 
+/// Whether the standalone project at `dir` declares a per-chip `[features]`
+/// table. Compile-tests do not (their chip rides on forwarded `<dep>/<chip>`
+/// features), so the bare chip feature must not be enabled for them.
+pub(crate) fn project_has_chip_feature_table(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join("Cargo.toml"))
+        .ok()
+        .and_then(|s| s.parse::<DocumentMut>().ok())
+        .is_some_and(|doc| !feature_table_chips(&doc).is_empty())
+}
+
 /// The chips named by a project's `[features]` keys.
 fn feature_table_chips(doc: &DocumentMut) -> Vec<Chip> {
     doc.get("features")
@@ -872,7 +882,7 @@ fn dependency_requirement(doc: &DocumentMut, dep: &str) -> Option<String> {
         .map(String::from)
 }
 
-pub(crate) fn manifest_declares_feature(manifest: &DocumentMut, feature: &str) -> bool {
+fn manifest_declares_feature(manifest: &DocumentMut, feature: &str) -> bool {
     manifest
         .get("features")
         .and_then(|f| f.as_table())
