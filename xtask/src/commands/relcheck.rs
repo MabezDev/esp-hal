@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Args, Subcommand, ValueEnum as _};
+use clap::{Subcommand, ValueEnum as _};
 use semver::{Comparator, Op, Version, VersionReq};
 use strum::IntoEnumIterator;
 use toml_edit::Table;
@@ -17,36 +17,14 @@ use crate::{Package, cargo::CargoToml, commands::release::plan::Plan, windows_sa
 pub enum RelCheckCmds {
     /// Initialize the local registry
     Init,
-
     /// Deinitialize the local registry
     Deinit,
-
-    /// Package the release plan's crates into the local registry at their
-    /// planned versions.
-    Update(PlanSelector),
-
-    /// Rewrite `esp-*` path dependencies in examples and tests to the versions
-    /// available in the local registry.
-    ReplacePathDeps(PlanSelector),
+    /// Package the release plan's crates into the local registry at their planned versions.
+    Update,
+    /// Rewrite `esp-*` path dependencies in examples and tests to registry versions.
+    ReplacePathDeps,
     /// Validate workspace esp-rom-sys dependency version policy.
     CheckRomSysPolicy,
-}
-
-/// Selects the release plan a command operates on: either a local file
-/// (default `release_plan.jsonc`) or the plan embedded in a release PR body.
-#[derive(Args, Debug, Clone)]
-pub struct PlanSelector {
-    /// Path to a finalized release plan file.
-    #[arg(
-        long,
-        default_value = "release_plan.jsonc",
-        conflicts_with = "plan_from_pr"
-    )]
-    plan: PathBuf,
-
-    /// Read the plan from the body of this release PR instead of a local file.
-    #[arg(long)]
-    plan_from_pr: Option<u64>,
 }
 
 pub fn run_rel_check(args: RelCheckCmds) -> Result<()> {
@@ -55,45 +33,18 @@ pub fn run_rel_check(args: RelCheckCmds) -> Result<()> {
     match args {
         RelCheckCmds::Init => init_rel_check()?,
         RelCheckCmds::Deinit => deinit_rel_check()?,
-        RelCheckCmds::Update(selector) => update(&load_plan(selector)?)?,
-        RelCheckCmds::ReplacePathDeps(selector) => scrap_path_deps(&load_plan(selector)?)?,
+        RelCheckCmds::Update => update(&load_plan()?)?,
+        RelCheckCmds::ReplacePathDeps => scrap_path_deps(&load_plan()?)?,
         RelCheckCmds::CheckRomSysPolicy => check_rom_sys_policy(Path::new("."))?,
     }
 
     Ok(())
 }
 
-/// Load the plan from a release PR body (via `gh`) or a local file.
-fn load_plan(selector: PlanSelector) -> Result<Plan> {
-    match selector.plan_from_pr {
-        Some(pr) => {
-            let body = fetch_pr_body(pr)?;
-            Plan::from_pr_body(&body).with_context(|| format!("reading the plan from PR #{pr}"))
-        }
-        None => Plan::from_path(&selector.plan),
-    }
-}
-
-fn fetch_pr_body(pr: u64) -> Result<String> {
-    let output = Command::new("gh")
-        .args(["pr", "view", &pr.to_string()])
-        .args([
-            "--repo",
-            crate::UPSTREAM_REPO,
-            "--json",
-            "body",
-            "-q",
-            ".body",
-        ])
-        .output()
-        .context("Failed to run `gh pr view`. Is the GitHub CLI installed and authenticated?")?;
-
-    ensure!(
-        output.status.success(),
-        "`gh pr view {pr}` failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+/// Load the finalized `release_plan.jsonc`. CI writes it from the PR body before
+/// running the check.
+fn load_plan() -> Result<Plan> {
+    Plan::from_path(Path::new("release_plan.jsonc"))
 }
 
 /// The version an `esp-*` path dependency is rewritten to: the plan's version
