@@ -23,47 +23,38 @@ env:
 jobs:
   check:
     runs-on: macos-m1-self-hosted
-    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+    # Only release PRs (branched as `release-branch-*` by `execute-plan`) carry a
+    # plan, so ordinary PRs never run this. `xrel-check` bails if the plan is
+    # missing.
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release-branch-') }}
 
     steps:
       - uses: actions/checkout@v6
 
       # A release PR embeds its plan in a ```jsonc block in the body. Extract it
       # to release_plan.jsonc so every `xrel-check` step reads it from disk.
-      # Ordinary PRs carry no plan, so the expensive registry build is skipped.
-      - name: detect-plan
-        id: plan
+      - name: extract-plan
+        if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            gh pr view "${{ github.event.pull_request.number }}" \
-              --repo "${{ github.repository }}" --json body -q .body \
-              | tr -d '\r' \
-              | awk '/^```jsonc/{f=1;next} f&&/^```/{f=0} f' > release_plan.jsonc || true
-          fi
-          if [ -s release_plan.jsonc ]; then
-            echo "has_plan=true" >> "$GITHUB_OUTPUT"
-          else
-            rm -f release_plan.jsonc
-            echo "has_plan=false" >> "$GITHUB_OUTPUT"
-          fi
+          gh pr view "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" --json body -q .body \
+            | tr -d '\r' \
+            | awk '/^```jsonc/{f=1;next} f&&/^```/{f=0} f' > release_plan.jsonc
 
       - uses: ./.github/actions/setup-toolchains
-        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         with:
           xtensa: "true"
           riscv: "true"
 
       # Install the Rust nightly toolchain for RISC-V devices:
       - uses: ./.github/actions/setup-nightly
-        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         with:
           targets: all
           components: rust-src
           alias: "true"
 
       - name: Setup cargo-batch
-        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         run: |
           if ! command -v cargo-batch &> /dev/null; then
               cargo install --git https://github.com/embassy-rs/cargo-batch cargo --bin cargo-batch --locked --force
@@ -74,11 +65,9 @@ jobs:
       # which builds the `esp-metadata` tool - and that host tool cannot resolve
       # its dependencies (e.g. `prettyplease`) against the local registry.
       - name: warm-metadata-cache
-        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         run: cargo update-metadata
 
       - name: init-local-registry
-        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         run: |
           cargo xrel-check init
           cargo xrel-check update
@@ -88,7 +77,6 @@ jobs:
       # smoke test, so it runs on every release PR. Each chip uses the
       # `ci-toolchain` recorded for it in chips.json.
       - name: try-build [compile-tests]
-        if: ${{ steps.plan.outputs.has_plan == 'true' }}
         shell: bash
         run: |
           for soc in $(jq -r '.[].soc' .github/chips.json); do
@@ -102,7 +90,7 @@ jobs:
       # Build the examples/qa/tests against the local registry. Runs by default;
       # add `release:registry:skip-ci` to the PR to opt out of this heavy check.
       - name: try-build [examples/qa/tests]
-        if: ${{ steps.plan.outputs.has_plan == 'true' && !contains(github.event.pull_request.labels.*.name, 'release:registry:skip-ci') }}
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'release:registry:skip-ci') }}
         shell: bash
         run: |
           # lints and docs are checked a couple of times already by other workflows
