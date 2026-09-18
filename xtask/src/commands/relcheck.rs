@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     str::from_utf8,
 };
 
@@ -10,7 +11,7 @@ use semver::{Comparator, Op, Version, VersionReq};
 use strum::IntoEnumIterator;
 use toml_edit::Table;
 
-use crate::{Package, cargo::CargoToml, windows_safe_path};
+use crate::{Package, cargo::CargoToml, commands::release::plan::Plan, windows_safe_path};
 
 #[derive(Debug, Subcommand)]
 pub enum RelCheckCmds {
@@ -54,58 +55,29 @@ pub fn run_rel_check(args: RelCheckCmds) -> Result<()> {
     match args {
         RelCheckCmds::Init => init_rel_check()?,
         RelCheckCmds::Deinit => deinit_rel_check()?,
-        RelCheckCmds::Update(selector) => {
-            update(&load_plan(Some(selector.plan), selector.plan_from_pr)?)?
-        }
-        RelCheckCmds::ReplacePathDeps(selector) => {
-            scrap_path_deps(&load_plan(Some(selector.plan), selector.plan_from_pr)?)?
-        }
+        RelCheckCmds::Update(selector) => update(&load_plan(selector)?)?,
+        RelCheckCmds::ReplacePathDeps(selector) => scrap_path_deps(&load_plan(selector)?)?,
         RelCheckCmds::CheckRomSysPolicy => check_rom_sys_policy(Path::new("."))?,
     }
 
     Ok(())
 }
 
-/// Minimal view of `release_plan.jsonc`.
-///
-/// The registry check runs without the `release` feature, so it cannot borrow
-/// the full `Plan` type from the release code. Only the fields this check reads
-/// are modelled; every other field in the plan is ignored.
-#[derive(Debug, Clone, serde::Deserialize)]
-struct PlanFile {
-    packages: Vec<PlanEntry>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct PlanEntry {
-    package: Package,
-    new_version: Version,
-}
-
-/// Load the plan from a release PR body or a local file. A PR number wins over
-/// the `--plan` path, which always carries its default, so `--plan-from-pr`
-/// takes effect without the caller clearing the default.
-fn load_plan(plan: Option<PathBuf>, plan_from_pr: Option<u64>) -> Result<PlanFile> {
-    if let Some(pr) = plan_from_pr {
-        let body = fetch_pr_body(pr)?;
-        return parse_plan(&body)
-            .with_context(|| format!("Failed to parse the release plan embedded in PR #{pr}"));
+/// Load the plan from a release PR body (via `gh`) or a local file.
+fn load_plan(selector: PlanSelector) -> Result<Plan> {
+    match selector.plan_from_pr {
+        Some(pr) => {
+            let body = fetch_pr_body(pr)?;
+            Plan::from_pr_body(&body).with_context(|| format!("reading the plan from PR #{pr}"))
+        }
+        None => Plan::from_path(&selector.plan),
     }
-
-    let path = plan.unwrap_or_else(|| PathBuf::from("release_plan.jsonc"));
-    let source = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read release plan from {}", path.display()))?;
-    parse_plan(&source)
-        .with_context(|| format!("Failed to parse release plan from {}", path.display()))
 }
 
-/// Fetch a PR body through the GitHub CLI so the embedded plan can be read.
 fn fetch_pr_body(pr: u64) -> Result<String> {
-    let output = std::process::Command::new("gh")
+    let output = Command::new("gh")
+        .args(["pr", "view", &pr.to_string()])
         .args([
-            "pr",
-            "view",
-            &pr.to_string(),
             "--repo",
             crate::UPSTREAM_REPO,
             "--json",
@@ -116,68 +88,20 @@ fn fetch_pr_body(pr: u64) -> Result<String> {
         .output()
         .context("Failed to run `gh pr view`. Is the GitHub CLI installed and authenticated?")?;
 
-    if !output.status.success() {
-        bail!(
-            "`gh pr view {pr}` failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
+    ensure!(
+        output.status.success(),
+        "`gh pr view {pr}` failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Parse a [`PlanFile`] from either the raw `release_plan.jsonc` contents
-/// (which may still carry the `//` header the planner writes) or a PR body that
-/// embeds the plan in a fenced `jsonc` block.
-fn parse_plan(source: &str) -> Result<PlanFile> {
-    let json = extract_fenced_jsonc(source).unwrap_or_else(|| source.to_string());
-
-    // Drop the `//` header a freshly generated plan carries; it is not valid
-    // JSON. A finalized plan (and a fenced PR block) has no such lines, so this
-    // is a no-op there.
-    let json = json
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    serde_json::from_str::<PlanFile>(&json).context("Release plan is not valid JSON")
-}
-
-/// Return the contents of the first fenced `jsonc` block in `body`, if any.
-fn extract_fenced_jsonc(body: &str) -> Option<String> {
-    let mut collecting = false;
-    let mut collected = Vec::new();
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if collecting {
-            if trimmed == "```" {
-                return Some(collected.join("\n"));
-            }
-            collected.push(line);
-        } else if trimmed.starts_with("```jsonc") {
-            collecting = true;
-        }
-    }
-    None
-}
-
-/// The crates to package from the working tree: exactly the plan's crates.
-///
-/// Every other published crate must already be in the registry from crates.io
-/// (via `init`); packaging one from the working tree would risk publishing
-/// unreleased content under an already-released version number.
-fn packages_to_package_from_tree(plan: &PlanFile) -> Vec<Package> {
-    plan.packages.iter().map(|entry| entry.package).collect()
-}
-
-/// Pick the version an `esp-*` path dependency is rewritten to: the plan's
-/// `new_version` when the crate is being released, otherwise the newest version
-/// already in the local registry (synced from crates.io). A frozen crate must
-/// never resolve to a working-tree version.
+/// The version an `esp-*` path dependency is rewritten to: the plan's version
+/// when the crate is being released, otherwise the newest already in the
+/// registry. A frozen crate must never resolve to a working-tree version.
 fn choose_replacement_version(
     krate: &Package,
-    plan: &PlanFile,
+    plan: &Plan,
     registry_versions: &[Version],
 ) -> Result<Version> {
     if let Some(entry) = plan.packages.iter().find(|entry| &entry.package == krate) {
@@ -185,86 +109,35 @@ fn choose_replacement_version(
     }
 
     registry_versions.iter().max().cloned().ok_or_else(|| {
-        anyhow::anyhow!(
-            "{krate} is not in the release plan and has no version in the local registry. \
-             Frozen crates are synced from crates.io by `init` and must be present here."
-        )
+        anyhow::anyhow!("{krate} is not in the plan and has no version in the local registry")
     })
 }
 
-/// Environment for cargo subprocesses with the outer `CARGO*` variables
-/// stripped, so a nested `cargo run` (the xtask alias) does not leak its own
-/// resolver configuration into the invoked cargo.
+/// Ambient `CARGO*` variables stripped, so a nested cargo does not leak its
+/// resolver configuration into the invoked one.
 fn cargo_env() -> Vec<(String, String)> {
     std::env::vars()
         .filter(|(k, _)| !k.starts_with("CARGO"))
         .collect()
 }
 
-/// Outcome of a cargo invocation whose stderr was captured.
-struct CargoOutcome {
-    success: bool,
-    stderr: String,
-}
-
-/// Run a cargo invocation, capturing stderr. Errors only if the process cannot
-/// be spawned; a non-zero exit is reported in the outcome so the caller can
-/// clean up before deciding how to fail.
-fn run_cargo(cmd: &mut std::process::Command) -> Result<CargoOutcome> {
+/// Run cargo with a clean environment, capturing stderr so a failure (a resolver
+/// error included) is surfaced verbatim instead of being retried or swallowed.
+fn run_cargo(cmd: &mut Command, what: &str) -> Result<()> {
     let output = cmd
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .env_clear()
+        .envs(cargo_env())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
         .output()
-        .context("Failed to spawn cargo")?;
+        .with_context(|| format!("Failed to spawn cargo while {what}"))?;
 
-    Ok(CargoOutcome {
-        success: output.status.success(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
-}
-
-/// Run a cargo step whose non-resolution failures are tolerated (matching the
-/// registry's best-effort priming), but whose resolution failures must not be
-/// swallowed or retried into a confusing downstream error.
-fn run_cargo_lenient(cmd: &mut std::process::Command, what: &str) -> Result<()> {
-    let outcome = run_cargo(cmd)?;
-    if !outcome.success {
-        if is_resolution_failure(&outcome.stderr) {
-            return Err(cargo_failure(what, &outcome));
-        }
-        log::warn!(
-            "cargo step failed while {what} (continuing):\n{}",
-            outcome.stderr
-        );
-    }
+    ensure!(
+        output.status.success(),
+        "cargo failed while {what}:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
-}
-
-/// Whether cargo's stderr names a dependency-resolution failure. The message
-/// already lists the crate, the requirement, and the versions available, so the
-/// caller can surface it verbatim.
-fn is_resolution_failure(stderr: &str) -> bool {
-    const MARKERS: [&str; 4] = [
-        "failed to select a version",
-        "no matching package",
-        "unable to find",
-        "cannot find package",
-    ];
-    MARKERS.iter().any(|marker| stderr.contains(marker))
-}
-
-/// Build a single error for a failed cargo invocation, surfacing a resolution
-/// failure verbatim so the registry check reports one clear cause.
-fn cargo_failure(what: &str, outcome: &CargoOutcome) -> anyhow::Error {
-    if is_resolution_failure(&outcome.stderr) {
-        anyhow::anyhow!(
-            "Dependency resolution failed while {what}. The local registry has no version that \
-             satisfies a requirement:\n{}",
-            outcome.stderr
-        )
-    } else {
-        anyhow::anyhow!("cargo failed while {what}:\n{}", outcome.stderr)
-    }
 }
 
 fn toolchain() -> String {
@@ -487,20 +360,23 @@ fn init_rel_check() -> Result<()> {
     Ok(())
 }
 
-fn update(plan: &PlanFile) -> Result<()> {
+fn update(plan: &Plan) -> Result<()> {
     if !std::fs::exists("target/local-registry")? {
         bail!("Cannot update - run `init` first.");
     }
 
     let workspace = Path::new(".");
 
+    // Only the plan's crates are packaged from the working tree; everything else
+    // is already in the registry from crates.io, so packaging it here would risk
+    // publishing unreleased content under a released version number.
     let plan_versions = plan
         .packages
         .iter()
         .map(|entry| (entry.package, entry.new_version.clone()))
         .collect::<HashMap<_, _>>();
 
-    let mut packages_to_release = packages_to_package_from_tree(plan);
+    let mut packages_to_release = plan_versions.keys().copied().collect::<Vec<_>>();
     packages_to_release.sort();
     packages_to_release.dedup();
 
@@ -569,24 +445,19 @@ fn update(plan: &PlanFile) -> Result<()> {
         log::info!("Updating...");
 
         // make sure we have a lock file
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.arg("update")
-            .current_dir(&package_path)
-            .env_clear()
-            .envs(cargo_env());
-        run_cargo_lenient(&mut cmd, &format!("running `cargo update` for {package}"))?;
+        let mut cmd = Command::new("cargo");
+        cmd.arg("update").current_dir(&package_path);
+        run_cargo(&mut cmd, &format!("running `cargo update` for {package}"))?;
 
         // prepare all the deps we need
-        let mut cmd = std::process::Command::new("cargo");
+        let mut cmd = Command::new("cargo");
         cmd.arg("local-registry")
             .arg("--no-delete")
             .arg("--sync")
             .arg("Cargo.lock")
             .arg("../target/local-registry")
-            .current_dir(&package_path)
-            .env_clear()
-            .envs(cargo_env());
-        run_cargo_lenient(&mut cmd, &format!("syncing dependencies for {package}"))?;
+            .current_dir(&package_path);
+        run_cargo(&mut cmd, &format!("syncing dependencies for {package}"))?;
 
         std::fs::write(
             ".cargo/config.toml",
@@ -611,27 +482,19 @@ fn update(plan: &PlanFile) -> Result<()> {
                 .display()
             ),
         )?;
-        let mut cmd = std::process::Command::new("cargo");
+        let mut cmd = Command::new("cargo");
         cmd.arg("package")
             .arg("--no-verify")
             .arg("--verbose")
             .arg("--allow-dirty")
             .arg("--index=http://crates.io")
             .arg("--target-dir=../target")
-            .current_dir(&package_path)
-            .env_clear()
-            .envs(cargo_env());
-        let outcome = run_cargo(&mut cmd)?;
-
-        // Restore the workspace config before reacting to the result so a
-        // failure does not leave the source-replacement block behind.
+            .current_dir(&package_path);
+        // A plan crate that fails to package is a hard error. Restore the config
+        // before reacting so a failure does not leave the source block behind.
+        let packaged = run_cargo(&mut cmd, &format!("packaging {package}"));
         std::fs::write(".cargo/config.toml", &original_config)?;
-
-        if !outcome.success {
-            // A plan crate that fails to package is a hard error: the registry
-            // would otherwise be missing a crate this release needs.
-            return Err(cargo_failure(&format!("packaging {package}"), &outcome));
-        }
+        packaged?;
 
         // copy the crate to our registry
         let toml = package.toml();
@@ -796,7 +659,7 @@ fn revert_scrap_path_deps() -> Result<()> {
     Ok(())
 }
 
-fn scrap_path_deps(plan: &PlanFile) -> Result<()> {
+fn scrap_path_deps(plan: &Plan) -> Result<()> {
     if !std::fs::exists("target/local-registry")? {
         bail!("Cannot scrap path dependencies - run `init` first.");
     }
@@ -819,33 +682,29 @@ fn scrap_path_deps(plan: &PlanFile) -> Result<()> {
             for manifest_path in manifest_paths {
                 // make sure we have a lock file
                 std::fs::remove_file(manifest_path.join("Cargo.lock")).ok();
-                let mut cmd = std::process::Command::new("cargo");
+                let mut cmd = Command::new("cargo");
                 cmd.arg(format!("+{}", toolchain()))
                     .arg("metadata")
                     .arg("--format-version=1")
                     .current_dir(&manifest_path);
-                run_cargo_lenient(
+                run_cargo(
                     &mut cmd,
                     &format!("resolving metadata in {}", manifest_path.display()),
                 )?;
 
                 // add dependencies to the local registry
-                let mut cmd = std::process::Command::new("cargo");
-                cmd.arg("local-registry");
-                cmd.arg("--no-delete");
-                cmd.arg("--sync");
-                cmd.arg("Cargo.lock");
-                cmd.arg(windows_safe_path(
-                    &std::path::PathBuf::from("target/local-registry")
-                        .canonicalize()
-                        .unwrap(),
-                ));
-                cmd.env_clear();
-                cmd.envs(cargo_env());
-                cmd.current_dir(&manifest_path);
-
-                log::info!("{:?}", cmd);
-                run_cargo_lenient(
+                let mut cmd = Command::new("cargo");
+                cmd.arg("local-registry")
+                    .arg("--no-delete")
+                    .arg("--sync")
+                    .arg("Cargo.lock")
+                    .arg(windows_safe_path(
+                        &std::path::PathBuf::from("target/local-registry")
+                            .canonicalize()
+                            .unwrap(),
+                    ))
+                    .current_dir(&manifest_path);
+                run_cargo(
                     &mut cmd,
                     &format!("syncing dependencies in {}", manifest_path.display()),
                 )?;
@@ -1055,82 +914,39 @@ mod tests {
         Version::parse(s).unwrap()
     }
 
-    /// A finalized plan (pure JSON) with two crates. Extra fields exercise that
-    /// the minimal structs ignore what they do not model.
-    fn sample_plan_json() -> &'static str {
-        r#"{
+    fn sample_plan() -> Plan {
+        let json = r#"{
   "base": "main",
   "slug": "abc123",
   "packages": [
     { "package": "esp-metadata-generated", "semver_checked": false, "current_version": "0.5.1", "new_version": "0.6.0", "tag_name": "esp-metadata-generated-v0.6.0", "bump": { "base": "Minor", "pre": null } },
     { "package": "esp-hal", "semver_checked": true, "current_version": "1.2.0", "new_version": "1.3.0", "tag_name": "esp-hal-v1.3.0", "bump": { "base": "Minor", "pre": null } }
   ]
-}"#
-    }
-
-    fn assert_sample(plan: &PlanFile) {
-        assert_eq!(plan.packages.len(), 2);
-        assert_eq!(plan.packages[0].package, Package::EspMetadataGenerated);
-        assert_eq!(plan.packages[0].new_version, ver("0.6.0"));
-        assert_eq!(plan.packages[1].package, Package::EspHal);
-        assert_eq!(plan.packages[1].new_version, ver("1.3.0"));
-    }
-
-    #[test]
-    fn parses_plain_plan_json() {
-        assert_sample(&parse_plan(sample_plan_json()).unwrap());
-    }
-
-    #[test]
-    fn parses_plan_with_comment_header() {
-        let src = format!(
-            "// generated by xtask\n//\n// edit me\n{}",
-            sample_plan_json()
-        );
-        assert_sample(&parse_plan(&src).unwrap());
-    }
-
-    #[test]
-    fn parses_plan_in_jsonc_fence() {
-        let body = format!(
-            "PR body preamble\n\n<details>\n\n```jsonc\n{}\n```\n\n</details>\n\ntrailing text\n\n```\nnot a plan\n```",
-            sample_plan_json()
-        );
-        assert_sample(&parse_plan(&body).unwrap());
-    }
-
-    #[test]
-    fn packages_to_package_are_the_plan_crates() {
-        let plan = parse_plan(sample_plan_json()).unwrap();
-        let pkgs = packages_to_package_from_tree(&plan);
-        assert_eq!(pkgs.len(), 2);
-        assert!(pkgs.contains(&Package::EspMetadataGenerated));
-        assert!(pkgs.contains(&Package::EspHal));
+}"#;
+        serde_json::from_str(json).unwrap()
     }
 
     #[test]
     fn plan_crate_uses_plan_version_over_registry() {
-        let plan = parse_plan(sample_plan_json()).unwrap();
-        // The registry carries a newer version, but a crate in the plan must
-        // resolve to its planned version regardless.
+        // The registry carries a newer version, but a plan crate resolves to its
+        // planned version.
         let registry = [ver("0.6.5"), ver("0.5.1")];
         let chosen =
-            choose_replacement_version(&Package::EspMetadataGenerated, &plan, &registry).unwrap();
+            choose_replacement_version(&Package::EspMetadataGenerated, &sample_plan(), &registry)
+                .unwrap();
         assert_eq!(chosen, ver("0.6.0"));
     }
 
     #[test]
     fn frozen_crate_uses_newest_registry_version() {
-        let plan = parse_plan(sample_plan_json()).unwrap();
         let registry = [ver("0.10.0"), ver("0.11.0"), ver("0.9.0")];
-        let chosen = choose_replacement_version(&Package::EspAlloc, &plan, &registry).unwrap();
+        let chosen =
+            choose_replacement_version(&Package::EspAlloc, &sample_plan(), &registry).unwrap();
         assert_eq!(chosen, ver("0.11.0"));
     }
 
     #[test]
     fn frozen_crate_without_registry_versions_errors() {
-        let plan = parse_plan(sample_plan_json()).unwrap();
-        let registry: [Version; 0] = [];
-        assert!(choose_replacement_version(&Package::EspAlloc, &plan, &registry).is_err());
+        assert!(choose_replacement_version(&Package::EspAlloc, &sample_plan(), &[]).is_err());
     }
 }

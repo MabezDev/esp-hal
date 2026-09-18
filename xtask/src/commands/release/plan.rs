@@ -126,6 +126,24 @@ impl Plan {
 
         Ok(plan)
     }
+
+    /// Parse the plan `execute_plan` embeds in a release PR body inside a
+    /// ```jsonc fenced block.
+    pub fn from_pr_body(body: &str) -> Result<Self> {
+        let json = extract_jsonc_block(body)
+            .context("no ```jsonc release-plan block found in the PR body")?;
+        serde_json::from_str(&json).context("Failed to parse the release plan from the PR body")
+    }
+}
+
+/// Return the contents of the first ```jsonc fenced block in `text`.
+fn extract_jsonc_block(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    lines
+        .by_ref()
+        .find(|l| l.trim_start().starts_with("```jsonc"))?;
+    let block: Vec<&str> = lines.take_while(|l| l.trim() != "```").collect();
+    (!block.is_empty()).then(|| block.join("\n"))
 }
 
 /// Generate a release plan for the specified packages.
@@ -687,16 +705,12 @@ pub struct StaleDependency {
     pub commits: usize,
 }
 
-/// Run every planner gate against a finalized set of plan packages.
+/// Run every planner gate against a finalized set of plan packages, refusing a
+/// plan that is wrong on paper and returning the non-blocking stale-dependency
+/// warnings.
 ///
-/// Refuses (errors) on facts that are wrong on paper - a frozen crate's
-/// published requirement rejecting a planned version, or a frozen crate's
-/// working-tree manifest drifting from its release tag. Returns the
-/// non-blocking stale-dependency warnings for the caller to report.
-///
-/// "Frozen" means published, not in the plan, and not a collection of
-/// standalone projects. Everything read about a frozen crate comes from its
-/// release tag (`<package>-v<current_version>`), never the working tree, which
+/// A frozen crate (published, not in the plan, not a standalone-project
+/// collection) is read from its release tag, never the working tree, which
 /// `bump_crate_version` rewrites for every workspace crate.
 pub fn validate_plan(workspace: &Path, packages: &[PackagePlan]) -> Result<Vec<StaleDependency>> {
     let in_plan = packages.iter().map(|p| p.package).collect::<HashSet<_>>();
@@ -705,8 +719,6 @@ pub fn validate_plan(workspace: &Path, packages: &[PackagePlan]) -> Result<Vec<S
         .map(|p| (p.package, p.new_version.clone()))
         .collect::<HashMap<_, _>>();
 
-    // Read each frozen crate's published requirements (for the upward closure
-    // walk) and detect manifest drift, both from the release tag.
     let mut frozen_reqs: HashMap<Package, Vec<(Package, String)>> = HashMap::new();
     let mut drift_errors = Vec::new();
     for pkg in Package::iter().filter(|p| p.is_published() && !p.contains_standalone_projects()) {
@@ -718,8 +730,7 @@ pub fn validate_plan(workspace: &Path, packages: &[PackagePlan]) -> Result<Vec<S
         let tag = pkg.tag(&tree.package_version());
         ensure!(
             crate::git::ref_exists(workspace, &tag)?,
-            "Cannot validate the release: frozen package {pkg} has no release tag {tag}. \
-             A frozen crate's requirements are read from its tag, so the tag must exist."
+            "Cannot validate the release: frozen package {pkg} has no release tag {tag}."
         );
 
         let mut at_tag = CargoToml::at_ref(workspace, pkg, &tag)?;
@@ -749,9 +760,8 @@ pub fn validate_plan(workspace: &Path, packages: &[PackagePlan]) -> Result<Vec<S
         drift_errors.join("\n\n")
     );
 
-    // Stale-dependency warnings: a plan crate depending on a frozen in-repo
-    // crate that has commits since its tag. Non-blocking; the registry check
-    // decides whether the commits are actually needed.
+    // Non-blocking: a plan crate depending on a frozen in-repo crate with
+    // commits since its tag. The registry check decides if they are needed.
     let mut warnings = Vec::new();
     for step in packages {
         let mut toml = CargoToml::new(workspace, step.package)?;
@@ -1520,6 +1530,19 @@ mod tests {
             !msg.contains("embassy-time"),
             "unchanged deps must not be listed, got: {msg}"
         );
+    }
+
+    #[test]
+    fn plan_parses_from_a_pr_body_jsonc_block() {
+        let body = "intro\n\n```jsonc\n{\n  \"base\": \"main\",\n  \"slug\": \"abc\",\n  \
+             \"packages\": [ { \"package\": \"esp-hal\", \"semver_checked\": true, \
+             \"current_version\": \"1.2.0\", \"new_version\": \"1.3.0\", \"tag_name\": \
+             \"esp-hal-v1.3.0\", \"bump\": { \"base\": \"Minor\", \"pre\": null } } ]\n}\n```\n\
+             \n```\nnot a plan\n```";
+        let plan = Plan::from_pr_body(body).unwrap();
+        assert_eq!(plan.packages.len(), 1);
+        assert_eq!(plan.packages[0].package, Package::EspHal);
+        assert_eq!(plan.packages[0].new_version, ver("1.3.0"));
     }
 
     #[test]

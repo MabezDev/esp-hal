@@ -633,12 +633,9 @@ impl CargoToml {
             })
     }
 
-    /// Load and parse the Cargo.toml for `package` as it existed at `git_ref`.
-    ///
-    /// Reads the manifest via `git show <ref>:<path>` so a frozen crate's
-    /// requirements come from its release tag rather than the working tree,
-    /// which `bump_crate_version` rewrites for every workspace crate regardless
-    /// of whether it is in the plan.
+    /// Load the Cargo.toml for `package` as it existed at `git_ref`, so a frozen
+    /// crate's requirements come from its release tag rather than the working
+    /// tree that `bump_crate_version` rewrites.
     pub fn at_ref(workspace: &Path, package: Package, git_ref: &str) -> Result<Self> {
         let repo_relative = format!("{}/Cargo.toml", package.directory());
         let manifest = crate::git::show_file_at_ref(workspace, git_ref, &repo_relative)
@@ -838,16 +835,9 @@ impl CargoToml {
         dependencies
     }
 
-    /// Every dependency requirement as a `(name, version requirement)` pair,
-    /// across the normal, build, and target-specific sections.
-    ///
-    /// `dev-dependencies` are excluded: they are not part of the published
-    /// crate, so they never reach a downstream user's dependency tree. Renamed
-    /// dependencies (`alias = { package = "real-name" }`) resolve to the real
-    /// crate name. Dependencies without a `version` (e.g. git-only) are skipped.
-    ///
-    /// The result is sorted, so two manifests can be compared for drift by
-    /// comparing the returned vectors directly.
+    /// Every non-dev dependency as a sorted `(name, requirement)` pair, so two
+    /// manifests can be diffed for drift directly. Renamed deps resolve to the
+    /// real crate name; deps without a `version` are skipped.
     pub fn dependency_requirements(&mut self) -> Vec<(String, String)> {
         let mut dependencies = Vec::new();
         self.visit_dependencies(|_, dependency_kind, table| {

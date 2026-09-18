@@ -53,10 +53,7 @@ pub fn examples(
         .filter(|example| example.supports_chip(chip))
         .collect::<Vec<_>>();
 
-    // A compile-test build that selects no project for a chip is a coverage gap,
-    // not a silent success. Guard only CompileTests so examples/ (whose per-chip
-    // coverage is expected to be sparse) is unaffected. bare-hal covers every
-    // chip, so in practice this only fires on a regression.
+    // Guard only CompileTests; examples/ coverage is legitimately sparse.
     if package == Package::CompileTests && examples.is_empty() {
         bail!(
             "No compile-test project selects chip '{chip}'. Every chip must be covered by at \
@@ -64,11 +61,8 @@ pub fn examples(
         );
     }
 
-    // Drop (project, chip) combinations whose forwarded `<dep>/<chip>` feature
-    // will not resolve, so an already-published dependency line that predates the
-    // chip is skipped instead of failing the build with an "unknown feature"
-    // error. A chip-dep the release itself publishes that lacks the feature is a
-    // hard error inside the check.
+    // Skip projects whose forwarded `<dep>/<chip>` feature will not resolve on a
+    // published dependency line that predates the chip.
     if package == Package::CompileTests && matches!(action, CargoAction::Build(_)) {
         let mut supported = Vec::with_capacity(examples.len());
         for ex in examples {

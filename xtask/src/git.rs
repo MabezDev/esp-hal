@@ -84,11 +84,8 @@ pub fn ref_exists(workspace: &std::path::Path, git_ref: &str) -> Result<bool> {
     Ok(status.success())
 }
 
-/// Read the contents of `repo_relative_path` as it existed at `git_ref`, via
-/// `git show <ref>:<path>`.
-///
-/// The path must be relative to the repository root and use `/` separators, as
-/// git addresses tree entries that way regardless of host OS.
+/// Read `repo_relative_path` as it existed at `git_ref` via `git show`. The path
+/// must use `/` separators, as git addresses tree entries that way on every OS.
 pub fn show_file_at_ref(
     workspace: &std::path::Path,
     git_ref: &str,
