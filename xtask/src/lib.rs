@@ -724,12 +724,6 @@ pub fn generate_build_command(
     if !features.is_empty() {
         log::info!("  Features:      {}", features.join(", "));
     }
-    // Metadata-driven compile-test projects have no bare chip feature; their chip
-    // is carried by the forwarded `<dep>/<chip>` features, so pushing it here
-    // would fail with "unknown feature".
-    if app.append_chip_feature() {
-        features.push(chip.to_string());
-    }
 
     // A standalone project is a directory with its own manifest, anything else is a source file
     // inside the package.
@@ -740,6 +734,16 @@ pub fn generate_build_command(
     } else {
         package_path.to_path_buf()
     };
+
+    // Enable the bare chip feature only when the manifest declares it. Host
+    // packages and legacy standalone projects have one feature per chip;
+    // metadata-driven compile-test projects carry the chip through forwarded
+    // `<dep>/<chip>` features and have none, so pushing it would fail.
+    let push_chip_feature = !standalone_project
+        || manifest_declares_feature(&cwd.join("Cargo.toml"), &chip.to_string());
+    if push_chip_feature {
+        features.push(chip.to_string());
+    }
 
     let mut builder = CargoArgsBuilder::new(app.output_file_name())
         .manifest_path(cwd.join("Cargo.toml"))
@@ -822,6 +826,19 @@ pub fn generate_build_command(
 
 // ----------------------------------------------------------------------------
 // Helper Functions
+
+/// Whether a manifest's `[features]` table declares `feature`.
+fn manifest_declares_feature(manifest_path: &Path, feature: &str) -> bool {
+    std::fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| {
+            doc.get("features")
+                .and_then(Item::as_table)
+                .map(|table| table.contains_key(feature))
+        })
+        .unwrap_or(false)
+}
 
 /// Copy an entire directory recursively.
 // https://stackoverflow.com/a/65192210

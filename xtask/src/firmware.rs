@@ -25,11 +25,6 @@ pub struct Metadata {
     support_firmware: bool,
     env_vars: HashMap<String, String>,
     cargo_config: Vec<String>,
-    /// Whether the bare chip name (e.g. `esp32c6`) must be appended as a cargo
-    /// feature when building. Metadata-driven compile-test projects carry their
-    /// chip through forwarded `<dep>/<chip>` features and have no such feature,
-    /// so pushing it would fail with "unknown feature".
-    append_chip_feature: bool,
 }
 
 impl Metadata {
@@ -73,11 +68,6 @@ impl Metadata {
     /// A list of all features required for building a given example.
     pub fn feature_set(&self) -> &[String] {
         &self.features
-    }
-
-    /// Whether the bare chip feature should be appended when building this artifact.
-    pub fn append_chip_feature(&self) -> bool {
-        self.append_chip_feature
     }
 
     /// A list of all env vars to build a given example.
@@ -422,7 +412,6 @@ pub fn load(path: &Path) -> Result<Vec<Metadata>> {
                     support_firmware: configuration.support_firmware.unwrap_or(false),
                     env_vars: configuration.esp_config.clone(),
                     cargo_config: configuration.cargo_config.clone(),
-                    append_chip_feature: true,
                 })
             }
         }
@@ -516,9 +505,6 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
                     support_firmware: false,
                     env_vars: HashMap::new(),
                     cargo_config: Vec::new(),
-                    // The chip is carried by the forwarded `<dep>/<chip>` features; these
-                    // projects have no bare chip feature to push.
-                    append_chip_feature: false,
                 });
             }
             continue;
@@ -568,7 +554,6 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
                 support_firmware: false,
                 env_vars: HashMap::new(),
                 cargo_config: Vec::new(),
-                append_chip_feature: true,
             });
         }
     }
@@ -753,12 +738,9 @@ pub fn format_compile_test_coverage(coverage: &[(String, Vec<Chip>)]) -> String 
         .join("\n")
 }
 
-/// The feature names declared for `version` in a crates.io sparse-index body.
-///
-/// The body is newline-delimited JSON, one object per version. Merges the keys
-/// of `features` and the optional `features2` (cargo splits weak/`dep:` feature
-/// syntax into `features2` for older cargo compatibility, but the feature names
-/// are equally valid).
+/// The feature names declared for `version` in a crates.io sparse-index body
+/// (newline-delimited JSON). Merges `features` and `features2`, since cargo
+/// splits weak/`dep:` syntax into the latter but the names are equally valid.
 pub fn features_for_version(
     index_body: &str,
     version: &semver::Version,
@@ -842,8 +824,7 @@ fn sparse_index_url(crate_name: &str) -> String {
 }
 
 /// Fetch a crate's sparse-index document via `curl`, or `None` when curl or the
-/// network is unavailable. A dedicated dependency for this would be overkill for
-/// one best-effort pre-check.
+/// network is unavailable. curl avoids a dependency for one best-effort check.
 fn fetch_sparse_index(crate_name: &str) -> Option<String> {
     let url = sparse_index_url(crate_name);
     let output = std::process::Command::new("curl")
@@ -859,16 +840,10 @@ fn fetch_sparse_index(crate_name: &str) -> Option<String> {
 /// Whether every `chip-deps` crate of the compile-test project at `project_path`
 /// declares the `<chip>` cargo feature at the version that will resolve.
 ///
-/// A frozen (already-published) dependency line that predates the chip returns
-/// `Ok(false)`: the project does not cover the chip, so the build skips it rather
-/// than failing on a `<dep>/<chip>` feature cargo cannot find. This is what keeps
-/// a new chip from breaking older compile-test lines (`build compile-tests all
-/// <new-chip>` stays green while only the lines that support it, plus bare-hal,
-/// build).
-///
-/// A dependency the release itself will publish (its working-tree version
-/// satisfies the requirement) that lacks the feature is a hard error: that is a
-/// chip added to metadata without wiring up the crate's feature.
+/// A frozen dependency line that predates the chip returns `Ok(false)` so the
+/// build skips this project for the chip instead of hitting a `<dep>/<chip>`
+/// feature cargo cannot find. A dependency the release itself publishes that
+/// lacks the feature is a hard error (see [`chip_dep_declares_feature`]).
 pub fn compile_test_project_supports_chip(
     workspace: &Path,
     project_path: &Path,

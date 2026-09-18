@@ -69,17 +69,13 @@ pub fn execute_plan(workspace: &Path, args: ApplyPlanArgs) -> Result<()> {
         );
     }
 
-    // Recompute every package's target version and tag from `current_version`
-    // and `bump` before any validation, so a hand-edited `bump` (rather than the
-    // possibly-stale `new_version` field) decides what gets released and
-    // checked. This also aborts before touching any files if a manifest's
-    // version has drifted from the plan.
+    // Recompute each version and tag from `current_version` and `bump` before
+    // validation, so a hand-edited `bump` (not a stale `new_version`) decides
+    // what is released, and a drifted manifest aborts before any file changes.
     //
-    // We deliberately do NOT reuse the manifests parsed here in the apply loop
-    // below. Bumping a package rewrites the on-disk manifests of its workspace
-    // dependents, so a package bumped after its dependencies must be re-read to
-    // observe those rewrites. Saving a snapshot taken here would write it back
-    // stale and silently revert every dependency bump an earlier step applied.
+    // Do not reuse these manifests in the apply loop: bumping a package rewrites
+    // its workspace dependents on disk, so each must be re-read there or an
+    // earlier dependency bump would be silently reverted.
     let mut bump_decisions = Vec::with_capacity(plan.packages.len());
     for step in plan.packages.iter_mut() {
         let package = CargoToml::new(workspace, step.package).with_context(|| {
