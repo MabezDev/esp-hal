@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
 };
@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
+use toml_edit::{DocumentMut, InlineTable, Value};
 
 use crate::{Package, ScriptContext, metadata::Chip, windows_safe_path};
 
@@ -24,6 +25,11 @@ pub struct Metadata {
     support_firmware: bool,
     env_vars: HashMap<String, String>,
     cargo_config: Vec<String>,
+    /// Whether the bare chip name (e.g. `esp32c6`) must be appended as a cargo
+    /// feature when building. Metadata-driven compile-test projects carry their
+    /// chip through forwarded `<dep>/<chip>` features and have no such feature,
+    /// so pushing it would fail with "unknown feature".
+    append_chip_feature: bool,
 }
 
 impl Metadata {
@@ -67,6 +73,11 @@ impl Metadata {
     /// A list of all features required for building a given example.
     pub fn feature_set(&self) -> &[String] {
         &self.features
+    }
+
+    /// Whether the bare chip feature should be appended when building this artifact.
+    pub fn append_chip_feature(&self) -> bool {
+        self.append_chip_feature
     }
 
     /// A list of all env vars to build a given example.
@@ -411,6 +422,7 @@ pub fn load(path: &Path) -> Result<Vec<Metadata>> {
                     support_firmware: configuration.support_firmware.unwrap_or(false),
                     env_vars: configuration.esp_config.clone(),
                     cargo_config: configuration.cargo_config.clone(),
+                    append_chip_feature: true,
                 })
             }
         }
@@ -456,6 +468,16 @@ fn parse_chips_from_annotation(
 }
 
 /// Load all examples by finding all packages in the given path, and parsing their metadata.
+///
+/// Two shapes coexist under `examples/` and `compile-tests/`:
+///
+/// - Metadata-driven compile-test projects declare a `compile-test` table under
+///   `[package.metadata.espressif]`. Their chip set is derived from device metadata via the `if`
+///   predicate, and the per-chip cargo feature is carried entirely by forwarded `<dep>/<chip>`
+///   features - no bare chip feature.
+/// - Legacy standalone projects (e.g. `examples/async/embassy_ethernet`) declare one `[features]`
+///   key per supported chip. Their chip set is those keys, optionally narrowed by a `//%
+///   CHIP_FILTER` annotation.
 pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
     let mut examples = Vec::new();
 
@@ -474,8 +496,35 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
         let text = fs::read_to_string(&main_rs_path)?;
         let description = parse_description(&text);
 
-        let toml = fs::read_to_string(&cargo_toml_path)?;
-        let toml: CargoToml = toml_edit::de::from_str(&toml)?;
+        let toml_str = fs::read_to_string(&cargo_toml_path)?;
+
+        if let Some(manifest) = parse_compile_test_metadata(&toml_str).with_context(|| {
+            format!(
+                "Failed to parse compile-test metadata in {}",
+                cargo_toml_path.display()
+            )
+        })? {
+            for chip in parse_chips(&manifest.if_expr)? {
+                examples.push(Metadata {
+                    example_path: package_path.clone(),
+                    chip,
+                    configuration_name: String::new(),
+                    features: manifest.features_for_chip(chip)?,
+                    tag: None,
+                    description: description.clone(),
+                    harness_firmware: None,
+                    support_firmware: false,
+                    env_vars: HashMap::new(),
+                    cargo_config: Vec::new(),
+                    // The chip is carried by the forwarded `<dep>/<chip>` features; these
+                    // projects have no bare chip feature to push.
+                    append_chip_feature: false,
+                });
+            }
+            continue;
+        }
+
+        let toml: CargoToml = toml_edit::de::from_str(&toml_str)?;
 
         let cargo_chips: Vec<Chip> = toml
             .features
@@ -519,11 +568,428 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
                 support_firmware: false,
                 env_vars: HashMap::new(),
                 cargo_config: Vec::new(),
+                append_chip_feature: true,
             });
         }
     }
 
     Ok(examples)
+}
+
+/// The `[package.metadata.espressif].compile-test` table of one project.
+#[derive(Debug, Clone)]
+struct CompileTestManifest {
+    /// Project-level chip predicate over device-metadata symbols.
+    if_expr: String,
+    /// Deps whose `<dep>/<chip>` feature is forwarded for each selected chip.
+    chip_deps: Vec<String>,
+    /// Extra features always added for a selected chip.
+    features: Vec<String>,
+    /// Conditional feature groups, each `(predicate, features)`.
+    append: Vec<(String, Vec<String>)>,
+}
+
+impl CompileTestManifest {
+    /// The full cargo feature list for one selected chip.
+    fn features_for_chip(&self, chip: Chip) -> Result<Vec<String>> {
+        let mut features = self
+            .chip_deps
+            .iter()
+            .map(|dep| format!("{dep}/{chip}"))
+            .collect::<Vec<_>>();
+        features.extend(self.features.iter().cloned());
+        for (predicate, extra) in &self.append {
+            if chip_matches(chip, predicate)? {
+                features.extend(extra.iter().cloned());
+            }
+        }
+        // Deterministic order so batched builds group identical feature sets.
+        features.sort();
+        Ok(features)
+    }
+}
+
+/// Parse the `compile-test` metadata table from a project manifest.
+///
+/// Returns `Ok(None)` when the project has no such table, which is what routes a
+/// legacy `[features]`-key project through the other branch of `load_cargo_toml`.
+fn parse_compile_test_metadata(toml_str: &str) -> Result<Option<CompileTestManifest>> {
+    let doc = toml_str
+        .parse::<DocumentMut>()
+        .context("Failed to parse Cargo.toml")?;
+
+    let Some(item) = doc
+        .get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("espressif"))
+        .and_then(|e| e.get("compile-test"))
+    else {
+        return Ok(None);
+    };
+
+    let table = item
+        .as_inline_table()
+        .context("`compile-test` must be an inline table")?;
+
+    let if_expr = table
+        .get("if")
+        .and_then(Value::as_str)
+        .context("`compile-test.if` is required and must be a string")?
+        .to_string();
+
+    let chip_deps = required_string_array(table, "chip-deps")?;
+    if chip_deps.is_empty() {
+        bail!("`compile-test.chip-deps` must not be empty");
+    }
+
+    let features = match table.get("features") {
+        Some(value) => value_to_string_array(value, "compile-test.features")?,
+        None => Vec::new(),
+    };
+
+    let mut append = Vec::new();
+    if let Some(value) = table.get("append") {
+        let array = value
+            .as_array()
+            .context("`compile-test.append` must be an array")?;
+        for entry in array {
+            let entry = entry
+                .as_inline_table()
+                .context("`compile-test.append` items must be inline tables")?;
+            let predicate = entry
+                .get("if")
+                .and_then(Value::as_str)
+                .context("`compile-test.append` items require a string `if`")?
+                .to_string();
+            let extra = match entry.get("features") {
+                Some(value) => value_to_string_array(value, "compile-test.append.features")?,
+                None => Vec::new(),
+            };
+            append.push((predicate, extra));
+        }
+    }
+
+    Ok(Some(CompileTestManifest {
+        if_expr,
+        chip_deps,
+        features,
+        append,
+    }))
+}
+
+fn required_string_array(table: &InlineTable, key: &str) -> Result<Vec<String>> {
+    let value = table
+        .get(key)
+        .with_context(|| format!("`compile-test.{key}` is required"))?;
+    value_to_string_array(value, &format!("compile-test.{key}"))
+}
+
+fn value_to_string_array(value: &Value, what: &str) -> Result<Vec<String>> {
+    let array = value
+        .as_array()
+        .with_context(|| format!("`{what}` must be an array"))?;
+    array
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(ToString::to_string)
+                .with_context(|| format!("`{what}` items must be strings"))
+        })
+        .collect()
+}
+
+/// Whether `expr` holds for `chip`, evaluated against the chip's device metadata.
+fn chip_matches(chip: Chip, expr: &str) -> Result<bool> {
+    let script_ctx = ScriptContext::new();
+    let mut ctx = script_ctx.for_chip(chip);
+    ctx.evaluate(expr)
+}
+
+/// The chips each metadata-driven compile-test project selects, keyed by project
+/// directory name. Report-only helper for the release plan and PR body.
+pub fn compile_test_coverage(workspace: &Path) -> Result<Vec<(String, Vec<Chip>)>> {
+    let root = windows_safe_path(&workspace.join(Package::CompileTests.directory()));
+    let mut packages = crate::find_packages(&root)?;
+    packages.sort();
+
+    let mut coverage = Vec::new();
+    for package_path in packages {
+        let cargo_toml_path = package_path.join("Cargo.toml");
+        if !cargo_toml_path.exists() {
+            continue;
+        }
+        let toml_str = fs::read_to_string(&cargo_toml_path)?;
+        let Some(manifest) = parse_compile_test_metadata(&toml_str)? else {
+            continue;
+        };
+        let name = package_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        coverage.push((name, parse_chips(&manifest.if_expr)?));
+    }
+
+    coverage.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(coverage)
+}
+
+/// Render [`compile_test_coverage`] as one `- project: chip, chip` line each.
+pub fn format_compile_test_coverage(coverage: &[(String, Vec<Chip>)]) -> String {
+    coverage
+        .iter()
+        .map(|(project, chips)| {
+            let chips = if chips.is_empty() {
+                "(no chips)".to_string()
+            } else {
+                chips
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("- {project}: {chips}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The feature names declared for `version` in a crates.io sparse-index body.
+///
+/// The body is newline-delimited JSON, one object per version. Merges the keys
+/// of `features` and the optional `features2` (cargo splits weak/`dep:` feature
+/// syntax into `features2` for older cargo compatibility, but the feature names
+/// are equally valid).
+pub fn features_for_version(
+    index_body: &str,
+    version: &semver::Version,
+) -> Result<BTreeSet<String>> {
+    #[derive(Deserialize)]
+    struct IndexEntry {
+        vers: String,
+        #[serde(default)]
+        features: HashMap<String, Vec<String>>,
+        #[serde(default)]
+        features2: Option<HashMap<String, Vec<String>>>,
+    }
+
+    for line in index_body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let entry: IndexEntry = serde_json::from_str(line)
+            .with_context(|| format!("Failed to parse crates.io index line: {line}"))?;
+        // Compare parsed versions so build metadata on one side doesn't cause a miss.
+        let Ok(entry_version) = semver::Version::parse(&entry.vers) else {
+            continue;
+        };
+        if entry_version == *version {
+            let mut names: BTreeSet<String> = entry.features.into_keys().collect();
+            if let Some(features2) = entry.features2 {
+                names.extend(features2.into_keys());
+            }
+            return Ok(names);
+        }
+    }
+
+    bail!("version {version} was not found in the crates.io index response");
+}
+
+/// The highest non-yanked published version satisfying `req`, from a sparse-index body.
+fn max_version_matching(
+    index_body: &str,
+    req: &semver::VersionReq,
+) -> Result<Option<semver::Version>> {
+    #[derive(Deserialize)]
+    struct VersionEntry {
+        vers: String,
+        #[serde(default)]
+        yanked: bool,
+    }
+
+    let mut best: Option<semver::Version> = None;
+    for line in index_body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let entry: VersionEntry = serde_json::from_str(line)
+            .with_context(|| format!("Failed to parse crates.io index line: {line}"))?;
+        if entry.yanked {
+            continue;
+        }
+        let Ok(version) = semver::Version::parse(&entry.vers) else {
+            continue;
+        };
+        if req.matches(&version) && best.as_ref().is_none_or(|b| version > *b) {
+            best = Some(version);
+        }
+    }
+
+    Ok(best)
+}
+
+/// The crates.io sparse-index URL for a crate, following the registry's prefix layout.
+fn sparse_index_url(crate_name: &str) -> String {
+    let name = crate_name.to_lowercase();
+    let prefix = match name.len() {
+        1 => "1".to_string(),
+        2 => "2".to_string(),
+        3 => format!("3/{}", &name[0..1]),
+        _ => format!("{}/{}", &name[0..2], &name[2..4]),
+    };
+    format!("https://index.crates.io/{prefix}/{name}")
+}
+
+/// Fetch a crate's sparse-index document via `curl`, or `None` when curl or the
+/// network is unavailable. A dedicated dependency for this would be overkill for
+/// one best-effort pre-check.
+fn fetch_sparse_index(crate_name: &str) -> Option<String> {
+    let url = sparse_index_url(crate_name);
+    let output = std::process::Command::new("curl")
+        .args(["-sSf", &url])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+/// Whether every `chip-deps` crate of the compile-test project at `project_path`
+/// declares the `<chip>` cargo feature at the version that will resolve.
+///
+/// A frozen (already-published) dependency line that predates the chip returns
+/// `Ok(false)`: the project does not cover the chip, so the build skips it rather
+/// than failing on a `<dep>/<chip>` feature cargo cannot find. This is what keeps
+/// a new chip from breaking older compile-test lines (`build compile-tests all
+/// <new-chip>` stays green while only the lines that support it, plus bare-hal,
+/// build).
+///
+/// A dependency the release itself will publish (its working-tree version
+/// satisfies the requirement) that lacks the feature is a hard error: that is a
+/// chip added to metadata without wiring up the crate's feature.
+pub fn compile_test_project_supports_chip(
+    workspace: &Path,
+    project_path: &Path,
+    chip: Chip,
+) -> Result<bool> {
+    let cargo_toml_path = project_path.join("Cargo.toml");
+    let toml_str = fs::read_to_string(&cargo_toml_path)?;
+    let Some(manifest) = parse_compile_test_metadata(&toml_str)? else {
+        // Not a metadata-driven compile-test project; nothing to verify here.
+        return Ok(true);
+    };
+
+    let doc = toml_str
+        .parse::<DocumentMut>()
+        .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
+
+    let mut index_cache: HashMap<String, Option<String>> = HashMap::new();
+    for dep in &manifest.chip_deps {
+        if !chip_dep_declares_feature(workspace, project_path, &doc, dep, chip, &mut index_cache)? {
+            log::info!(
+                "Skipping compile-test {} for {chip}: dependency `{dep}` does not support it at \
+                 the version that resolves",
+                project_path.display()
+            );
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn chip_dep_declares_feature(
+    workspace: &Path,
+    project: &Path,
+    doc: &DocumentMut,
+    dep: &str,
+    chip: Chip,
+    index_cache: &mut HashMap<String, Option<String>>,
+) -> Result<bool> {
+    let chip_feature = chip.to_string();
+
+    let Some(req_str) = dependency_requirement(doc, dep) else {
+        bail!(
+            "{}: `{dep}` is a compile-test chip-dep but has no [dependencies] entry",
+            project.display()
+        );
+    };
+    let req = semver::VersionReq::parse(&req_str).with_context(|| {
+        format!(
+            "{}: invalid version requirement `{req_str}` for {dep}",
+            project.display()
+        )
+    })?;
+
+    // Prefer the in-repo working-tree manifest when its version satisfies the
+    // requirement: that is the code the imminent release will publish, so its
+    // feature table is authoritative and a missing chip feature is a real error.
+    if let Ok(package) = Package::from_str(dep, true)
+        && let Ok(toml) = crate::cargo::CargoToml::new(workspace, package)
+    {
+        let tree_version = toml.package_version();
+        if req.matches(&tree_version) {
+            if manifest_declares_feature(&toml.manifest, &chip_feature) {
+                return Ok(true);
+            }
+            bail!(
+                "{}: crate `{dep}` {tree_version} (working tree) does not declare the \
+                 `{chip_feature}` feature required for {chip}. A chip was added to the metadata \
+                 without a matching feature in {dep}.",
+                project.display()
+            );
+        }
+    }
+
+    // Frozen line: read the published index. A missing feature means this line
+    // predates the chip, so the project does not cover it - skip, do not error.
+    let index_body = index_cache
+        .entry(dep.to_string())
+        .or_insert_with(|| fetch_sparse_index(dep));
+    let Some(index_body) = index_body.as_deref() else {
+        log::warn!(
+            "Cannot verify `{dep}` ({chip}) against the crates.io index (offline?); attempting the build"
+        );
+        return Ok(true);
+    };
+
+    let Some(resolved) = max_version_matching(index_body, &req)? else {
+        log::warn!("No published `{dep}` satisfies `{req_str}`; attempting the build");
+        return Ok(true);
+    };
+
+    let features = features_for_version(index_body, &resolved)?;
+    Ok(features.contains(&chip_feature))
+}
+
+/// The version requirement string for `dep` in a manifest's `[dependencies]`.
+fn dependency_requirement(doc: &DocumentMut, dep: &str) -> Option<String> {
+    let item = doc.get("dependencies")?.get(dep)?;
+    if let Some(version) = item.as_str() {
+        return Some(version.to_string());
+    }
+    if let Some(table) = item.as_inline_table() {
+        return table
+            .get("version")
+            .and_then(Value::as_str)
+            .map(String::from);
+    }
+    if let Some(table) = item.as_table() {
+        return table
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+    }
+    None
+}
+
+fn manifest_declares_feature(manifest: &DocumentMut, feature: &str) -> bool {
+    manifest
+        .get("features")
+        .and_then(|f| f.as_table())
+        .is_some_and(|table| table.contains_key(feature))
 }
 
 /// Load every example or test the given package owns.
@@ -584,4 +1050,172 @@ fn parse_description(text: &str) -> Option<String> {
     log::debug!("Parsed description: {:?}", description);
 
     description
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chips(expr: &str) -> Vec<Chip> {
+        parse_chips(expr).expect("expression should evaluate")
+    }
+
+    #[test]
+    fn wifi_predicate_selects_wifi_chips() {
+        let selected = chips("wifi_driver_supported");
+        // esp32s31 is Wi-Fi capable; esp32h2 and esp32p4 are not.
+        assert!(selected.contains(&Chip::Esp32s31));
+        assert!(!selected.contains(&Chip::Esp32h2));
+        assert!(!selected.contains(&Chip::Esp32p4));
+    }
+
+    #[test]
+    fn bt_predicate_excludes_esp32s31() {
+        let selected = chips("bt_driver_supported");
+        assert!(!selected.contains(&Chip::Esp32s31));
+        // esp32h2 has a Bluetooth driver but no Wi-Fi one.
+        assert!(selected.contains(&Chip::Esp32h2));
+    }
+
+    #[test]
+    fn bare_hal_predicate_selects_every_chip() {
+        // `true` is the bare-hal predicate: it must cover esp32p4, which nothing
+        // else selects, so no chip is ever left without a compile-test project.
+        let selected = chips("true");
+        assert!(selected.contains(&Chip::Esp32p4));
+        assert_eq!(selected.len(), Chip::iter().count());
+    }
+
+    #[test]
+    fn contradictory_predicate_selects_no_chip() {
+        // A predicate no chip satisfies yields an empty set; the build path turns
+        // this into a hard zero-coverage error.
+        assert!(chips("wifi_driver_supported && !wifi_driver_supported").is_empty());
+    }
+
+    #[test]
+    fn parses_compile_test_manifest_and_forwards_chip_features() {
+        let manifest = r#"
+            [package]
+            name = "wifi_x"
+            version = "0.0.0"
+
+            [dependencies]
+            esp-hal = "1.1.0"
+
+            [package.metadata.espressif]
+            compile-test = { if = 'wifi_driver_supported', chip-deps = ["esp-hal", "esp-radio"], features = ["esp-radio/wifi"], append = [ { if = 'wifi_driver_supported && bt_driver_supported', features = ["esp-radio/coex"] } ] }
+        "#;
+
+        let parsed = parse_compile_test_metadata(manifest)
+            .expect("valid manifest")
+            .expect("compile-test table present");
+        assert_eq!(parsed.if_expr, "wifi_driver_supported");
+        assert_eq!(parsed.chip_deps, ["esp-hal", "esp-radio"]);
+
+        // esp32c6 has both Wi-Fi and Bluetooth, so the coex append fires.
+        let c6 = parsed.features_for_chip(Chip::Esp32c6).unwrap();
+        assert!(c6.contains(&"esp-hal/esp32c6".to_string()));
+        assert!(c6.contains(&"esp-radio/esp32c6".to_string()));
+        assert!(c6.contains(&"esp-radio/wifi".to_string()));
+        assert!(c6.contains(&"esp-radio/coex".to_string()));
+
+        // esp32s31 has Wi-Fi but no Bluetooth, so the coex append does not fire.
+        let s31 = parsed.features_for_chip(Chip::Esp32s31).unwrap();
+        assert!(s31.contains(&"esp-radio/wifi".to_string()));
+        assert!(!s31.contains(&"esp-radio/coex".to_string()));
+    }
+
+    #[test]
+    fn legacy_features_manifest_has_no_compile_test_table() {
+        // A standalone example still keyed off `[features]` must route through the
+        // legacy branch (parse returns None).
+        let manifest = r#"
+            [package]
+            name = "legacy"
+            version = "0.0.0"
+
+            [features]
+            esp32 = ["esp-hal/esp32"]
+        "#;
+        assert!(parse_compile_test_metadata(manifest).unwrap().is_none());
+    }
+
+    #[test]
+    fn features_for_version_reports_declared_feature_names() {
+        // Two versions of the same crate; only 0.18.0 declares `esp32c6`.
+        let body = concat!(
+            r#"{"name":"esp-radio","vers":"0.17.0","deps":[],"features":{"wifi":[],"esp32":[]},"cksum":"a","yanked":false}"#,
+            "\n",
+            r#"{"name":"esp-radio","vers":"0.18.0","deps":[],"features":{"wifi":[]},"features2":{"esp32c6":[]},"cksum":"b","yanked":false}"#,
+            "\n",
+        );
+
+        let older = features_for_version(body, &semver::Version::parse("0.17.0").unwrap()).unwrap();
+        assert!(!older.contains("esp32c6"));
+
+        // The resolved (max satisfying) version and its merged feature set.
+        let req = semver::VersionReq::parse("^0.18.0").unwrap();
+        let resolved = max_version_matching(body, &req).unwrap().unwrap();
+        assert_eq!(resolved, semver::Version::parse("0.18.0").unwrap());
+        let features = features_for_version(body, &resolved).unwrap();
+        assert!(features.contains("esp32c6"));
+        assert!(features.contains("wifi"));
+    }
+
+    #[test]
+    fn features_for_version_flags_missing_chip_feature() {
+        // The version that resolves is missing the required chip feature.
+        let body = concat!(
+            r#"{"name":"dep","vers":"1.0.0","deps":[],"features":{"esp32":[]},"cksum":"a","yanked":false}"#,
+            "\n",
+            r#"{"name":"dep","vers":"1.1.0","deps":[],"features":{"esp32":[]},"cksum":"b","yanked":false}"#,
+            "\n",
+        );
+        let req = semver::VersionReq::parse("^1.0").unwrap();
+        let resolved = max_version_matching(body, &req).unwrap().unwrap();
+        assert_eq!(resolved, semver::Version::parse("1.1.0").unwrap());
+        let features = features_for_version(body, &resolved).unwrap();
+        assert!(!features.contains("esp32s31"));
+    }
+
+    #[test]
+    fn real_compile_tests_cover_every_chip() {
+        // Exercises the real manifests end to end: parses each project's
+        // compile-test table and derives its chip set from the live metadata.
+        let workspace = crate::repo_root_for_tests();
+        let coverage = compile_test_coverage(&workspace).expect("coverage should compute");
+
+        for chip in Chip::iter() {
+            assert!(
+                coverage.iter().any(|(_, chips)| chips.contains(&chip)),
+                "chip {chip} is not covered by any compile-test project"
+            );
+        }
+
+        // bare-hal is the catch-all, and esp32p4 relies on it exclusively.
+        let bare = coverage
+            .iter()
+            .find(|(name, _)| name == "bare-hal")
+            .expect("bare-hal project present");
+        assert_eq!(bare.1.len(), Chip::iter().count());
+
+        let p4_projects = coverage
+            .iter()
+            .filter(|(_, chips)| chips.contains(&Chip::Esp32p4))
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(p4_projects, ["bare-hal"]);
+    }
+
+    #[test]
+    fn sparse_index_url_follows_registry_prefix_layout() {
+        assert_eq!(sparse_index_url("a"), "https://index.crates.io/1/a");
+        assert_eq!(sparse_index_url("bc"), "https://index.crates.io/2/bc");
+        assert_eq!(sparse_index_url("abc"), "https://index.crates.io/3/a/abc");
+        assert_eq!(
+            sparse_index_url("esp-hal"),
+            "https://index.crates.io/es/p-/esp-hal"
+        );
+    }
 }

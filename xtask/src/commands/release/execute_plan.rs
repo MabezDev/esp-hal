@@ -197,6 +197,10 @@ pub fn execute_plan(workspace: &Path, args: ApplyPlanArgs) -> Result<()> {
     let branch_name = format!("release-branch-{}", plan.slug);
     let branch = make_git_changes(!args.no_dry_run, &branch_name, &commit_message(&plan))?;
 
+    // Report-only: include the compile-test chip coverage in the PR body. A read
+    // failure is logged and the section omitted rather than aborting the release.
+    let coverage_section = compile_test_coverage_section(workspace);
+
     open_pull_request(
         &branch,
         !args.no_dry_run,
@@ -204,6 +208,7 @@ pub fn execute_plan(workspace: &Path, args: ApplyPlanArgs) -> Result<()> {
         &plan_source,
         &plan,
         &warnings,
+        &coverage_section,
     )
     .with_context(|| "Failed to open pull request")?;
 
@@ -426,13 +431,29 @@ const UPSTREAM_REPO: &str = "esp-rs/esp-hal";
 // The registry compile-test runs on every release PR and the examples/tests step runs by
 // default, skipped only by adding `release:registry:skip-ci` (see `pre-rel-check.yml`), so
 // neither is applied here as an opt-in gate.
-const PR_LABELS: &[&str] = &[
-    "manual-changelog",
-    "release:docs",
-    "merge-freeze-exempt",
-];
+const PR_LABELS: &[&str] = &["manual-changelog", "release:docs", "merge-freeze-exempt"];
 
-fn build_pr_body(plan: &Plan, release_plan_str: &str, warnings: &[StaleDependency]) -> String {
+/// The compile-test chip coverage section for the PR body, or an empty string
+/// when it cannot be computed. Report-only.
+fn compile_test_coverage_section(workspace: &Path) -> String {
+    match crate::firmware::compile_test_coverage(workspace) {
+        Ok(coverage) => format!(
+            "\n### Compile-test chip coverage\n\n{}\n",
+            crate::firmware::format_compile_test_coverage(&coverage)
+        ),
+        Err(e) => {
+            log::warn!("Could not compute compile-test coverage: {e}");
+            String::new()
+        }
+    }
+}
+
+fn build_pr_body(
+    plan: &Plan,
+    release_plan_str: &str,
+    warnings: &[StaleDependency],
+    coverage_section: &str,
+) -> String {
     let packages = format_package_list(plan);
 
     let stale_section = if warnings.is_empty() {
@@ -449,7 +470,7 @@ fn build_pr_body(plan: &Plan, release_plan_str: &str, warnings: &[StaleDependenc
         r#"This pull request prepares the following packages for release:
 
 {packages}
-{stale_section}
+{stale_section}{coverage_section}
 <details>
 
 <summary>Release plan (click to expand)</summary>
@@ -489,8 +510,9 @@ fn open_pull_request(
     release_plan_str: &str,
     release_plan: &Plan,
     warnings: &[StaleDependency],
+    coverage_section: &str,
 ) -> Result<()> {
-    let body = build_pr_body(release_plan, release_plan_str, warnings);
+    let body = build_pr_body(release_plan, release_plan_str, warnings, coverage_section);
 
     if dry_run {
         println!("Dry run: would create/update the release PR with body:");

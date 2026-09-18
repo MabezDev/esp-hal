@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use super::{build::build_examples, run::run_examples, select};
 use crate::{Package, cargo::CargoAction, metadata::Chip};
@@ -52,6 +52,36 @@ pub fn examples(
         .into_iter()
         .filter(|example| example.supports_chip(chip))
         .collect::<Vec<_>>();
+
+    // A compile-test build that selects no project for a chip is a coverage gap,
+    // not a silent success. Guard only CompileTests so examples/ (whose per-chip
+    // coverage is expected to be sparse) is unaffected. bare-hal covers every
+    // chip, so in practice this only fires on a regression.
+    if package == Package::CompileTests && examples.is_empty() {
+        bail!(
+            "No compile-test project selects chip '{chip}'. Every chip must be covered by at \
+             least one project under compile-tests/ (bare-hal covers all chips)."
+        );
+    }
+
+    // Drop (project, chip) combinations whose forwarded `<dep>/<chip>` feature
+    // will not resolve, so an already-published dependency line that predates the
+    // chip is skipped instead of failing the build with an "unknown feature"
+    // error. A chip-dep the release itself publishes that lacks the feature is a
+    // hard error inside the check.
+    if package == Package::CompileTests && matches!(action, CargoAction::Build(_)) {
+        let mut supported = Vec::with_capacity(examples.len());
+        for ex in examples {
+            if crate::firmware::compile_test_project_supports_chip(
+                workspace,
+                ex.example_path(),
+                chip,
+            )? {
+                supported.push(ex);
+            }
+        }
+        examples = supported;
+    }
 
     examples.sort_by_key(|a| a.binary_name());
 

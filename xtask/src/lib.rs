@@ -724,7 +724,12 @@ pub fn generate_build_command(
     if !features.is_empty() {
         log::info!("  Features:      {}", features.join(", "));
     }
-    features.push(chip.to_string());
+    // Metadata-driven compile-test projects have no bare chip feature; their chip
+    // is carried by the forwarded `<dep>/<chip>` features, so pushing it here
+    // would fail with "unknown feature".
+    if app.append_chip_feature() {
+        features.push(chip.to_string());
+    }
 
     // A standalone project is a directory with its own manifest, anything else is a source file
     // inside the package.
