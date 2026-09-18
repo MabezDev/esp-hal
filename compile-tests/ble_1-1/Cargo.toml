@@ -31,12 +31,6 @@ trouble-host = { version = "0.6.0", features = [
 ] }
 static_cell = "2.1.1"
 
-# Chip selection is derived from device metadata: the project builds for every chip
-# whose `if` predicate holds, and the per-chip cargo feature is forwarded to each
-# `chip-deps` crate. Adding a new chip needs no edit here.
-[package.metadata.espressif]
-compile-test = { if = 'bt_driver_supported', chip-deps = ["esp-hal", "esp-rtos", "esp-radio", "esp-backtrace", "esp-bootloader-esp-idf"], features = ["esp-radio/ble"] }
-
 [profile.release]
 debug            = true
 debug-assertions = true

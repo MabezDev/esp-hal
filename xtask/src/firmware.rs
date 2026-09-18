@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
-use toml_edit::{DocumentMut, InlineTable, Value};
+use toml_edit::{DocumentMut, Value};
 
 use crate::{Package, ScriptContext, metadata::Chip, windows_safe_path};
 
@@ -445,11 +445,6 @@ pub fn load(path: &Path) -> Result<Vec<Metadata>> {
     Ok(examples)
 }
 
-#[derive(Debug, Deserialize)]
-struct CargoToml {
-    features: HashMap<String, Vec<String>>,
-}
-
 /// Parse the chip set from `//% CHIP_FILTER:` annotations in a source file.
 /// Returns `None` if the annotation is not present.
 fn parse_chips_from_annotation(
@@ -482,14 +477,12 @@ fn parse_chips_from_annotation(
 ///
 /// Two shapes coexist under `examples/` and `compile-tests/`:
 ///
-/// - Metadata-driven compile-test projects declare a `compile-test` table under
-///   `[package.metadata.espressif]`. Their chip set is derived from device metadata via the `if`
-///   predicate, and the per-chip cargo feature is carried entirely by forwarded `<dep>/<chip>`
-///   features - no bare chip feature.
-/// - Self-contained projects (e.g. `examples/async/embassy_ethernet`), each buildable on its own
-///   and meant to be copied elsewhere as a starting point, declare one `[features]` key per
-///   supported chip. Their chip set is those keys, optionally narrowed by a `//% CHIP_FILTER`
-///   annotation.
+/// - A project with no per-chip `[features]` table: chips come from its `//% CHIP_FILTER`
+///   annotation (every chip when absent), and xtask forwards `<dep>/<chip>` to each chip-aware
+///   dependency. This is how compile-tests work.
+/// - A self-contained project (e.g. `examples/async/embassy_ethernet`), each buildable on its own
+///   and meant to be copied elsewhere as a starting point, declares one `[features]` key per
+///   supported chip; that is its chip set, narrowed by an optional `//% CHIP_FILTER`.
 pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
     let mut examples = Vec::new();
 
@@ -509,19 +502,24 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
         let description = parse_description(&text);
 
         let toml_str = fs::read_to_string(&cargo_toml_path)?;
+        let doc = toml_str
+            .parse::<DocumentMut>()
+            .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
 
-        if let Some(manifest) = parse_compile_test_metadata(&toml_str).with_context(|| {
-            format!(
-                "Failed to parse compile-test metadata in {}",
-                cargo_toml_path.display()
-            )
-        })? {
-            for chip in parse_chips(&manifest.if_expr)? {
+        let annotation_chips = parse_chips_from_annotation(&text).with_context(|| {
+            format!("Failed to parse annotations in {}", main_rs_path.display())
+        })?;
+        let feature_chips = feature_table_chips(&doc);
+
+        if feature_chips.is_empty() {
+            let deps = chip_aware_deps(&doc);
+            for chip in selected_chips(&annotation_chips) {
+                let features = deps.iter().map(|dep| format!("{dep}/{chip}")).collect();
                 examples.push(Metadata {
                     example_path: package_path.clone(),
                     chip,
                     configuration_name: String::new(),
-                    features: manifest.features_for_chip(chip)?,
+                    features,
                     tag: None,
                     description: description.clone(),
                     harness_firmware: None,
@@ -533,23 +531,11 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
             continue;
         }
 
-        let toml: CargoToml = toml_edit::de::from_str(&toml_str)?;
-
-        let cargo_chips: Vec<Chip> = toml
-            .features
-            .keys()
-            .filter_map(|k| Chip::from_str(k, true).ok())
-            .collect();
-
-        let chips_from_annotations = parse_chips_from_annotation(&text).with_context(|| {
-            format!("Failed to parse annotations in {}", main_rs_path.display())
-        })?;
-
-        // If the annotation requires chips that are not declared in Cargo.toml, bail.
-        if let Some(ref required) = chips_from_annotations {
+        // A `[features]` chip table, narrowed by an optional `//% CHIP_FILTER`.
+        if let Some(ref required) = annotation_chips {
             let missing = required
                 .iter()
-                .filter(|c| !cargo_chips.contains(c))
+                .filter(|c| !feature_chips.contains(c))
                 .collect::<Vec<_>>();
             if !missing.is_empty() {
                 anyhow::bail!(
@@ -559,13 +545,13 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
             }
         }
 
-        let chips = cargo_chips.into_iter().filter(|c| {
-            chips_from_annotations
+        for chip in feature_chips {
+            if annotation_chips
                 .as_ref()
-                .is_none_or(|set| set.contains(c))
-        });
-
-        for chip in chips {
+                .is_some_and(|set| !set.contains(&chip))
+            {
+                continue;
+            }
             examples.push(Metadata {
                 example_path: package_path.clone(),
                 chip,
@@ -584,126 +570,46 @@ pub fn load_cargo_toml(examples_path: &Path) -> Result<Vec<Metadata>> {
     Ok(examples)
 }
 
-/// The `[package.metadata.espressif].compile-test` table of one project.
-#[derive(Debug, Clone)]
-struct CompileTestManifest {
-    /// Project-level chip predicate over device-metadata symbols.
-    if_expr: String,
-    /// Deps whose `<dep>/<chip>` feature is forwarded for each selected chip.
-    chip_deps: Vec<String>,
-    /// Extra features always added for a selected chip.
-    features: Vec<String>,
-    /// Conditional feature groups, each `(predicate, features)`.
-    append: Vec<(String, Vec<String>)>,
-}
-
-impl CompileTestManifest {
-    /// The full cargo feature list for one selected chip.
-    fn features_for_chip(&self, chip: Chip) -> Result<Vec<String>> {
-        let mut features = self
-            .chip_deps
-            .iter()
-            .map(|dep| format!("{dep}/{chip}"))
-            .collect::<Vec<_>>();
-        features.extend(self.features.iter().cloned());
-        for (predicate, extra) in &self.append {
-            if chip_matches(chip, predicate)? {
-                features.extend(extra.iter().cloned());
-            }
-        }
-        // Deterministic order so batched builds group identical feature sets.
-        features.sort();
-        Ok(features)
+/// Chips selected by a `//% CHIP_FILTER` annotation, or every chip when absent.
+fn selected_chips(annotation: &Option<std::collections::HashSet<Chip>>) -> Vec<Chip> {
+    match annotation {
+        Some(set) => Chip::iter().filter(|c| set.contains(c)).collect(),
+        None => Chip::iter().collect(),
     }
 }
 
-/// Parse the `compile-test` metadata table from a project manifest.
-///
-/// Returns `Ok(None)` when the project has no such table, routing a
-/// `[features]`-key project through the other branch of `load_cargo_toml`.
-fn parse_compile_test_metadata(toml_str: &str) -> Result<Option<CompileTestManifest>> {
-    let doc = toml_str
-        .parse::<DocumentMut>()
-        .context("Failed to parse Cargo.toml")?;
-
-    let Some(item) = doc
-        .get("package")
-        .and_then(|p| p.get("metadata"))
-        .and_then(|m| m.get("espressif"))
-        .and_then(|e| e.get("compile-test"))
-    else {
-        return Ok(None);
-    };
-
-    let table = item
-        .as_inline_table()
-        .context("`compile-test` must be an inline table")?;
-
-    let if_expr = table
-        .get("if")
-        .and_then(Value::as_str)
-        .context("`compile-test.if` is required and must be a string")?
-        .to_string();
-
-    let chip_deps = required_string_array(table, "chip-deps")?;
-    if chip_deps.is_empty() {
-        bail!("`compile-test.chip-deps` must not be empty");
-    }
-
-    let features = match table.get("features") {
-        Some(value) => value_to_string_array(value, "compile-test.features")?,
-        None => Vec::new(),
-    };
-
-    let mut append = Vec::new();
-    if let Some(value) = table.get("append") {
-        let array = value
-            .as_array()
-            .context("`compile-test.append` must be an array")?;
-        for entry in array {
-            let entry = entry
-                .as_inline_table()
-                .context("`compile-test.append` items must be inline tables")?;
-            let predicate = entry
-                .get("if")
-                .and_then(Value::as_str)
-                .context("`compile-test.append` items require a string `if`")?
-                .to_string();
-            let extra = match entry.get("features") {
-                Some(value) => value_to_string_array(value, "compile-test.append.features")?,
-                None => Vec::new(),
-            };
-            append.push((predicate, extra));
-        }
-    }
-
-    Ok(Some(CompileTestManifest {
-        if_expr,
-        chip_deps,
-        features,
-        append,
-    }))
-}
-
-fn required_string_array(table: &InlineTable, key: &str) -> Result<Vec<String>> {
-    let value = table
-        .get(key)
-        .with_context(|| format!("`compile-test.{key}` is required"))?;
-    value_to_string_array(value, &format!("compile-test.{key}"))
-}
-
-fn value_to_string_array(value: &Value, what: &str) -> Result<Vec<String>> {
-    let array = value
-        .as_array()
-        .with_context(|| format!("`{what}` must be an array"))?;
-    array
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(ToString::to_string)
-                .with_context(|| format!("`{what}` items must be strings"))
+/// The chips named by a project's `[features]` keys.
+fn feature_table_chips(doc: &DocumentMut) -> Vec<Chip> {
+    doc.get("features")
+        .and_then(|f| f.as_table())
+        .map(|table| {
+            table
+                .iter()
+                .filter_map(|(key, _)| Chip::from_str(key, true).ok())
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
+}
+
+/// The `esp-*` dependencies that declare chip features; xtask forwards each as
+/// `<dep>/<chip>` for the selected chips. Chip-agnostic deps (esp-alloc) and
+/// third-party crates are left out.
+fn chip_aware_deps(doc: &DocumentMut) -> Vec<Package> {
+    let Some(table) = doc.get("dependencies").and_then(|d| d.as_table()) else {
+        return Vec::new();
+    };
+    let mut deps = Vec::new();
+    for (name, item) in table.iter() {
+        let real = item.get("package").and_then(|p| p.as_str()).unwrap_or(name);
+        if let Ok(pkg) = Package::from_str(real, true)
+            && pkg.has_chip_features()
+            && !deps.contains(&pkg)
+        {
+            deps.push(pkg);
+        }
+    }
+    deps.sort();
+    deps
 }
 
 /// Whether `expr` holds for `chip`, evaluated against the chip's device metadata.
@@ -713,8 +619,8 @@ fn chip_matches(chip: Chip, expr: &str) -> Result<bool> {
     ctx.evaluate(expr)
 }
 
-/// The chips each metadata-driven compile-test project selects, keyed by project
-/// directory name. Report-only helper for the release plan and PR body.
+/// The chips each compile-test project selects (from its `//% CHIP_FILTER`),
+/// keyed by project directory name. Report-only helper for the plan and PR body.
 pub fn compile_test_coverage(workspace: &Path) -> Result<Vec<(String, Vec<Chip>)>> {
     let root = windows_safe_path(&workspace.join(Package::CompileTests.directory()));
     let mut packages = crate::find_packages(&root)?;
@@ -722,19 +628,17 @@ pub fn compile_test_coverage(workspace: &Path) -> Result<Vec<(String, Vec<Chip>)
 
     let mut coverage = Vec::new();
     for package_path in packages {
-        let cargo_toml_path = package_path.join("Cargo.toml");
-        if !cargo_toml_path.exists() {
+        let main_rs_path = package_path.join("src").join("main.rs");
+        if !main_rs_path.exists() {
             continue;
         }
-        let toml_str = fs::read_to_string(&cargo_toml_path)?;
-        let Some(manifest) = parse_compile_test_metadata(&toml_str)? else {
-            continue;
-        };
+        let text = fs::read_to_string(&main_rs_path)?;
+        let chips = selected_chips(&parse_chips_from_annotation(&text)?);
         let name = package_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        coverage.push((name, parse_chips(&manifest.if_expr)?));
+        coverage.push((name, chips));
     }
 
     coverage.sort_by(|a, b| a.0.cmp(&b.0));
@@ -874,18 +778,15 @@ pub fn compile_test_project_supports_chip(
 ) -> Result<bool> {
     let cargo_toml_path = project_path.join("Cargo.toml");
     let toml_str = fs::read_to_string(&cargo_toml_path)?;
-    let Some(manifest) = parse_compile_test_metadata(&toml_str)? else {
-        // Not a metadata-driven compile-test project; nothing to verify here.
-        return Ok(true);
-    };
-
     let doc = toml_str
         .parse::<DocumentMut>()
         .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
 
     let mut index_cache: HashMap<String, Option<String>> = HashMap::new();
-    for dep in &manifest.chip_deps {
-        if !chip_dep_declares_feature(workspace, project_path, &doc, dep, chip, &mut index_cache)? {
+    for dep in chip_aware_deps(&doc) {
+        let dep = dep.to_string();
+        if !chip_dep_declares_feature(workspace, project_path, &doc, &dep, chip, &mut index_cache)?
+        {
             log::info!(
                 "Skipping compile-test {} for {chip}: dependency `{dep}` does not support it at \
                  the version that resolves",
@@ -1108,51 +1009,39 @@ mod tests {
     }
 
     #[test]
-    fn parses_compile_test_manifest_and_forwards_chip_features() {
-        let manifest = r#"
-            [package]
-            name = "wifi_x"
-            version = "0.0.0"
-
+    fn chip_aware_deps_are_the_esp_crates_with_chip_features() {
+        // esp-hal and esp-alloc both declare per-chip features and are forwarded;
+        // embassy-executor is third-party (not a workspace crate) and is left out.
+        let doc = r#"
             [dependencies]
             esp-hal = "1.1.0"
+            esp-alloc = "0.10.0"
+            embassy-executor = "0.10.0"
+        "#
+        .parse::<DocumentMut>()
+        .unwrap();
 
-            [package.metadata.espressif]
-            compile-test = { if = 'wifi_driver_supported', chip-deps = ["esp-hal", "esp-radio"], features = ["esp-radio/wifi"], append = [ { if = 'wifi_driver_supported && bt_driver_supported', features = ["esp-radio/coex"] } ] }
-        "#;
-
-        let parsed = parse_compile_test_metadata(manifest)
-            .expect("valid manifest")
-            .expect("compile-test table present");
-        assert_eq!(parsed.if_expr, "wifi_driver_supported");
-        assert_eq!(parsed.chip_deps, ["esp-hal", "esp-radio"]);
-
-        // esp32c6 has both Wi-Fi and Bluetooth, so the coex append fires.
-        let c6 = parsed.features_for_chip(Chip::Esp32c6).unwrap();
-        assert!(c6.contains(&"esp-hal/esp32c6".to_string()));
-        assert!(c6.contains(&"esp-radio/esp32c6".to_string()));
-        assert!(c6.contains(&"esp-radio/wifi".to_string()));
-        assert!(c6.contains(&"esp-radio/coex".to_string()));
-
-        // esp32s31 has Wi-Fi but no Bluetooth, so the coex append does not fire.
-        let s31 = parsed.features_for_chip(Chip::Esp32s31).unwrap();
-        assert!(s31.contains(&"esp-radio/wifi".to_string()));
-        assert!(!s31.contains(&"esp-radio/coex".to_string()));
+        let deps = chip_aware_deps(&doc);
+        assert!(deps.contains(&Package::EspHal));
+        assert!(deps.contains(&Package::EspAlloc));
+        assert_eq!(deps.len(), 2);
     }
 
     #[test]
-    fn features_key_manifest_has_no_compile_test_table() {
-        // A project keyed off `[features]` routes through the other branch of
-        // load_cargo_toml (parse returns None).
-        let manifest = r#"
-            [package]
-            name = "standalone"
-            version = "0.0.0"
-
+    fn feature_table_chips_reads_only_chip_keys() {
+        let doc = r#"
             [features]
-            esp32 = ["esp-hal/esp32"]
-        "#;
-        assert!(parse_compile_test_metadata(manifest).unwrap().is_none());
+            default = []
+            esp32 = []
+            esp32c6 = []
+        "#
+        .parse::<DocumentMut>()
+        .unwrap();
+
+        let chips = feature_table_chips(&doc);
+        assert!(chips.contains(&Chip::Esp32));
+        assert!(chips.contains(&Chip::Esp32c6));
+        assert_eq!(chips.len(), 2);
     }
 
     #[test]
