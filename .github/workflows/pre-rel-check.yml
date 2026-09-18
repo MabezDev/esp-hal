@@ -28,25 +28,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # A release PR embeds its plan in a ```jsonc block in the body; a
-      # workflow_dispatch run must carry a checked-in `release_plan.jsonc`.
-      # Anything else (an ordinary PR) has no plan, so the expensive registry
-      # build below is skipped and the job passes quickly.
+      # A release PR embeds its plan in a ```jsonc block in the body. Extract it
+      # to release_plan.jsonc so every `xrel-check` step reads it from disk.
+      # Ordinary PRs carry no plan, so the expensive registry build is skipped.
       - name: detect-plan
         id: plan
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BODY=$(gh pr view "${{ github.event.pull_request.number }}" \
-              --repo "${{ github.repository }}" --json body -q .body || true)
-            if printf '%s' "$BODY" | grep -q '```jsonc'; then
-              echo "has_plan=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "has_plan=false" >> "$GITHUB_OUTPUT"
-            fi
-          elif [ -f release_plan.jsonc ]; then
+            gh pr view "${{ github.event.pull_request.number }}" \
+              --repo "${{ github.repository }}" --json body -q .body \
+              | tr -d '\r' \
+              | awk '/^```jsonc/{f=1;next} f&&/^```/{f=0} f' > release_plan.jsonc || true
+          fi
+          if [ -s release_plan.jsonc ]; then
             echo "has_plan=true" >> "$GITHUB_OUTPUT"
           else
+            rm -f release_plan.jsonc
             echo "has_plan=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -79,21 +77,12 @@ jobs:
         if: ${{ steps.plan.outputs.has_plan == 'true' }}
         run: cargo update-metadata
 
-      # The plan comes straight from the PR body via `--plan-from-pr`. A
-      # workflow_dispatch run has no PR number, so it falls back to the
-      # checked-in `release_plan.jsonc`.
       - name: init-local-registry
         if: ${{ steps.plan.outputs.has_plan == 'true' }}
-        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            PLAN_ARG="--plan-from-pr ${{ github.event.pull_request.number }}"
-          else
-            PLAN_ARG="--plan release_plan.jsonc"
-          fi
           cargo xrel-check init
-          cargo xrel-check update $PLAN_ARG
-          cargo xrel-check replace-path-deps $PLAN_ARG
+          cargo xrel-check update
+          cargo xrel-check replace-path-deps
 
       # Build the compile-tests against the local registry. This is the cheap
       # smoke test, so it runs on every release PR. Each chip uses the

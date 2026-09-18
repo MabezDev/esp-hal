@@ -126,24 +126,6 @@ impl Plan {
 
         Ok(plan)
     }
-
-    /// Parse the plan `execute_plan` embeds in a release PR body inside a
-    /// ```jsonc fenced block.
-    pub fn from_pr_body(body: &str) -> Result<Self> {
-        let json = extract_jsonc_block(body)
-            .context("no ```jsonc release-plan block found in the PR body")?;
-        serde_json::from_str(&json).context("Failed to parse the release plan from the PR body")
-    }
-}
-
-/// Return the contents of the first ```jsonc fenced block in `text`.
-fn extract_jsonc_block(text: &str) -> Option<String> {
-    let mut lines = text.lines();
-    lines
-        .by_ref()
-        .find(|l| l.trim_start().starts_with("```jsonc"))?;
-    let block: Vec<&str> = lines.take_while(|l| l.trim() != "```").collect();
-    (!block.is_empty()).then(|| block.join("\n"))
 }
 
 /// Generate a release plan for the specified packages.
@@ -1530,19 +1512,6 @@ mod tests {
             !msg.contains("embassy-time"),
             "unchanged deps must not be listed, got: {msg}"
         );
-    }
-
-    #[test]
-    fn plan_parses_from_a_pr_body_jsonc_block() {
-        let body = "intro\n\n```jsonc\n{\n  \"base\": \"main\",\n  \"slug\": \"abc\",\n  \
-             \"packages\": [ { \"package\": \"esp-hal\", \"semver_checked\": true, \
-             \"current_version\": \"1.2.0\", \"new_version\": \"1.3.0\", \"tag_name\": \
-             \"esp-hal-v1.3.0\", \"bump\": { \"base\": \"Minor\", \"pre\": null } } ]\n}\n```\n\
-             \n```\nnot a plan\n```";
-        let plan = Plan::from_pr_body(body).unwrap();
-        assert_eq!(plan.packages.len(), 1);
-        assert_eq!(plan.packages[0].package, Package::EspHal);
-        assert_eq!(plan.packages[0].new_version, ver("1.3.0"));
     }
 
     #[test]
