@@ -744,42 +744,66 @@ pub fn validate_plan(workspace: &Path, packages: &[PackagePlan]) -> Result<Vec<S
 
     // Non-blocking: a plan crate depending on a frozen in-repo crate with
     // commits since its tag. The registry check decides if they are needed.
-    let mut warnings = Vec::new();
+    let mut deps_of: HashMap<Package, Vec<Package>> = HashMap::new();
     for step in packages {
         let mut toml = CargoToml::new(workspace, step.package)?;
-        let mut deps = toml
+        let deps = toml
             .repo_dependency_requirements()
             .into_iter()
             .map(|(dep, _)| dep)
+            .filter(|dep| !in_plan.contains(dep) && dep.is_published())
             .collect::<Vec<_>>();
+        deps_of.insert(step.package, deps);
+    }
+
+    let mut to_check = deps_of.values().flatten().copied().collect::<Vec<_>>();
+    to_check.sort();
+    to_check.dedup();
+
+    let mut stale: HashMap<Package, (usize, String)> = HashMap::new();
+    for dep in to_check {
+        let dep_toml = CargoToml::new(workspace, dep)?;
+        let dep_tag = dep.tag(&dep_toml.package_version());
+        ensure!(
+            crate::git::ref_exists(workspace, &dep_tag)?,
+            "Cannot check {dep} for staleness: its release tag {dep_tag} does not exist."
+        );
+        let commits = commits_since_tag(workspace, &dep_toml.package_path(), &dep_tag);
+        if commits > 0 {
+            stale.insert(dep, (commits, dep_tag));
+        }
+    }
+
+    let plan_crates = packages.iter().map(|p| p.package).collect::<Vec<_>>();
+    Ok(stale_dependency_warnings(&plan_crates, &deps_of, &stale))
+}
+
+/// Pure core of the stale-dependency warning: pair each plan crate with its
+/// dependencies that carry commits since their release. `deps_of` holds each
+/// plan crate's out-of-plan published dependencies; `stale` maps a dependency
+/// with unreleased commits to its `(commit count, tag)`.
+fn stale_dependency_warnings(
+    plan_crates: &[Package],
+    deps_of: &HashMap<Package, Vec<Package>>,
+    stale: &HashMap<Package, (usize, String)>,
+) -> Vec<StaleDependency> {
+    let mut warnings = Vec::new();
+    for &package in plan_crates {
+        let mut deps = deps_of.get(&package).cloned().unwrap_or_default();
         deps.sort();
         deps.dedup();
-
         for dep in deps {
-            if in_plan.contains(&dep) || !dep.is_published() {
-                continue;
-            }
-
-            let dep_toml = CargoToml::new(workspace, dep)?;
-            let dep_tag = dep.tag(&dep_toml.package_version());
-            ensure!(
-                crate::git::ref_exists(workspace, &dep_tag)?,
-                "Cannot check {dep} for staleness: its release tag {dep_tag} does not exist."
-            );
-
-            let commits = commits_since_tag(workspace, &dep_toml.package_path(), &dep_tag);
-            if commits > 0 {
+            if let Some((commits, tag)) = stale.get(&dep) {
                 warnings.push(StaleDependency {
-                    package: step.package,
+                    package,
                     dependency: dep,
-                    tag: dep_tag,
-                    commits,
+                    tag: tag.clone(),
+                    commits: *commits,
                 });
             }
         }
     }
-
-    Ok(warnings)
+    warnings
 }
 
 /// Pure core of the upward closure walk: for every frozen crate (mapped to its
@@ -1509,6 +1533,29 @@ mod tests {
             !msg.contains("embassy-time"),
             "unchanged deps must not be listed, got: {msg}"
         );
+    }
+
+    #[test]
+    fn stale_dependency_warns_for_frozen_dep_with_commits() {
+        // #6334 (esp-radio beta.1): esp-radio is released while
+        // esp-metadata-generated stays frozen with commits since its tag (the
+        // S31 Wi-Fi metadata), so the planner warns. esp-hal has no new commits,
+        // so it is not flagged.
+        let deps_of = HashMap::from([(
+            Package::EspRadio,
+            vec![Package::EspMetadataGenerated, Package::EspHal],
+        )]);
+        let stale = HashMap::from([(
+            Package::EspMetadataGenerated,
+            (3usize, "esp-metadata-generated-v0.5.1".to_string()),
+        )]);
+
+        let warnings = stale_dependency_warnings(&[Package::EspRadio], &deps_of, &stale);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].package, Package::EspRadio);
+        assert_eq!(warnings[0].dependency, Package::EspMetadataGenerated);
+        assert_eq!(warnings[0].commits, 3);
+        assert_eq!(warnings[0].tag, "esp-metadata-generated-v0.5.1");
     }
 
     #[test]
