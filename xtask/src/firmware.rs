@@ -1053,9 +1053,9 @@ mod tests {
     }
 
     #[test]
-    fn bare_hal_predicate_selects_every_chip() {
-        // `true` is the bare-hal predicate: it must cover esp32p4, which nothing
-        // else selects, so no chip is ever left without a compile-test project.
+    fn hal_predicate_selects_every_chip() {
+        // `true` is the `hal` project's predicate: it must cover esp32p4, which
+        // nothing else selects, so no chip is left without a compile-test.
         let selected = chips("true");
         assert!(selected.contains(&Chip::Esp32p4));
         assert_eq!(selected.len(), Chip::iter().count());
@@ -1168,19 +1168,19 @@ mod tests {
             );
         }
 
-        // bare-hal is the catch-all, and esp32p4 relies on it exclusively.
-        let bare = coverage
+        // `hal` is the catch-all, and esp32p4 relies on it exclusively.
+        let hal = coverage
             .iter()
-            .find(|(name, _)| name == "bare-hal")
-            .expect("bare-hal project present");
-        assert_eq!(bare.1.len(), Chip::iter().count());
+            .find(|(name, _)| name == "hal")
+            .expect("hal project present");
+        assert_eq!(hal.1.len(), Chip::iter().count());
 
         let p4_projects = coverage
             .iter()
             .filter(|(_, chips)| chips.contains(&Chip::Esp32p4))
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(p4_projects, ["bare-hal"]);
+        assert_eq!(p4_projects, ["hal"]);
     }
 
     #[test]

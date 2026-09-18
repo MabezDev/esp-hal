@@ -57,7 +57,7 @@ pub fn examples(
     if package == Package::CompileTests && examples.is_empty() {
         bail!(
             "No compile-test project selects chip '{chip}'. Every chip must be covered by at \
-             least one project under compile-tests/ (bare-hal covers all chips)."
+             least one project under compile-tests/ (the `hal` project covers all chips)."
         );
     }
 
