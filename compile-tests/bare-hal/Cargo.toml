@@ -1,0 +1,35 @@
+[package]
+name    = "bare-hal"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# bare-hal exists to cover every chip, including the newest (esp32p4, esp32s31).
+# Those chips only gained support in esp-hal 1.2 / esp-backtrace 0.20 /
+# esp-bootloader-esp-idf 0.6 / esp-println 0.18, so the requirements track those
+# current lines rather than the older lines the wifi/ble projects pin. The line
+# (caret) form follows later releases within each minor line.
+[dependencies]
+esp-hal = { version = "1.2" }
+esp-backtrace = { version = "0.20", features = [
+    "panic-handler",
+    "println",
+] }
+esp-bootloader-esp-idf = { version = "0.6" }
+esp-println = { version = "0.18" }
+
+# The `if = 'true'` predicate makes this the one project every chip selects, so
+# no chip (esp32p4 in particular) is ever left without a compile-test. Chip
+# selection and the forwarded `<dep>/<chip>` features come from device metadata.
+[package.metadata.espressif]
+compile-test = { if = 'true', chip-deps = ["esp-hal", "esp-backtrace", "esp-bootloader-esp-idf", "esp-println"] }
+
+[profile.release]
+debug            = true
+debug-assertions = true
+lto              = "fat"
+codegen-units    = 1
+
+[package.metadata.cargo-machete]
+# esp-println is pulled in only as esp-backtrace's print backend.
+ignored = ["esp-println"]

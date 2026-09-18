@@ -856,9 +856,7 @@ impl CargoToml {
             }
             for (key, value) in table.iter() {
                 let (name, version) = match value {
-                    Item::Value(Value::String(version)) => {
-                        (key, Some(version.value().to_string()))
-                    }
+                    Item::Value(Value::String(version)) => (key, Some(version.value().to_string())),
                     Item::Value(Value::InlineTable(t)) => {
                         let name = t.get("package").and_then(|p| p.as_str()).unwrap_or(key);
                         let version = t.get("version").and_then(|v| v.as_str()).map(String::from);

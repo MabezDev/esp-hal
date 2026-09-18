@@ -335,6 +335,10 @@ pub fn plan(workspace: &Path, args: PlanArgs) -> Result<()> {
     let warnings = validate_plan(workspace, &plan_packages)?;
     print_stale_dependency_warnings(&warnings);
 
+    // Report which chips each compile-test project covers. Report-only: a gap here
+    // never blocks the plan (it surfaces at build time instead).
+    print_compile_test_coverage(workspace);
+
     let mut plan = Plan {
         base: current_branch,
         slug,
@@ -840,10 +844,14 @@ fn format_manifest_drift(
     for name in names {
         match (tag_map.get(&name), tree_map.get(&name)) {
             (Some(published), Some(tree)) if published != tree => {
-                lines.push(format!("    - {name}: {published:?} (tag) -> {tree:?} (working tree)"));
+                lines.push(format!(
+                    "    - {name}: {published:?} (tag) -> {tree:?} (working tree)"
+                ));
             }
             (Some(published), None) => {
-                lines.push(format!("    - {name}: {published:?} (tag) removed in working tree"));
+                lines.push(format!(
+                    "    - {name}: {published:?} (tag) removed in working tree"
+                ));
             }
             (None, Some(tree)) => {
                 lines.push(format!("    - {name}: added in working tree as {tree:?}"));
@@ -852,6 +860,21 @@ fn format_manifest_drift(
         }
     }
     lines.join("\n")
+}
+
+/// Print the compile-test chip coverage table. Report-only; a failure to read
+/// it is logged and swallowed so it can never block a plan.
+fn print_compile_test_coverage(workspace: &Path) {
+    match crate::firmware::compile_test_coverage(workspace) {
+        Ok(coverage) => {
+            println!("\nCompile-test chip coverage:");
+            println!(
+                "{}",
+                crate::firmware::format_compile_test_coverage(&coverage)
+            );
+        }
+        Err(e) => log::warn!("Could not compute compile-test coverage: {e}"),
+    }
 }
 
 /// Print stale-dependency warnings to stdout, grouped by plan crate.
