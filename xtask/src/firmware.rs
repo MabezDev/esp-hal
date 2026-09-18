@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use serde::Deserialize;
 use strum::IntoEnumIterator as _;
-use toml_edit::{DocumentMut, Value};
+use toml_edit::DocumentMut;
 
 use crate::{Package, ScriptContext, metadata::Chip, windows_safe_path};
 
@@ -863,25 +863,13 @@ fn chip_dep_declares_feature(
     Ok(features.contains(&chip_feature))
 }
 
-/// The version requirement string for `dep` in a manifest's `[dependencies]`.
+/// The version requirement string for `dep` in a manifest's `[dependencies]`,
+/// whether written as `dep = "x"`, `dep = { version = "x" }`, or a table.
 fn dependency_requirement(doc: &DocumentMut, dep: &str) -> Option<String> {
     let item = doc.get("dependencies")?.get(dep)?;
-    if let Some(version) = item.as_str() {
-        return Some(version.to_string());
-    }
-    if let Some(table) = item.as_inline_table() {
-        return table
-            .get("version")
-            .and_then(Value::as_str)
-            .map(String::from);
-    }
-    if let Some(table) = item.as_table() {
-        return table
-            .get("version")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-    }
-    None
+    item.as_str()
+        .or_else(|| item.get("version").and_then(|v| v.as_str()))
+        .map(String::from)
 }
 
 pub(crate) fn manifest_declares_feature(manifest: &DocumentMut, feature: &str) -> bool {
