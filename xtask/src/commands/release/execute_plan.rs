@@ -40,7 +40,8 @@ pub struct ApplyPlanArgs {
     manual_pull_request: bool,
 }
 
-/// Execute the release plan by making code changes, committing them to a new
+/// Execute the release plan: bump versions, merge changelog entries, commit the
+/// changes to a fresh release branch, and open (or update) the release PR.
 pub fn execute_plan(workspace: &Path, args: ApplyPlanArgs) -> Result<()> {
     ensure_workspace_clean(workspace)
         .with_context(|| format!("Workspace {workspace:?} is not clean!"))?;

@@ -208,48 +208,60 @@ fn deinit_rel_check() -> Result<()> {
     Ok(())
 }
 
+/// The shared local registry path, canonicalized and Windows-safe as
+/// cargo-local-registry wants it. `target/local-registry` must already exist.
+fn local_registry_path() -> Result<PathBuf> {
+    Ok(windows_safe_path(
+        &PathBuf::from("target/local-registry").canonicalize()?,
+    ))
+}
+
+/// Path to a toolchain's build-std `Cargo.lock`.
+fn build_std_lock(toolchain: &str) -> Result<PathBuf> {
+    Ok(toolchain_folder(toolchain)?.join("lib/rustlib/src/rust/library/Cargo.lock"))
+}
+
+/// `cargo local-registry --no-delete --sync <lock> <registry>` with a clean
+/// environment (ambient `CARGO*` stripped so a parent cargo does not leak its
+/// resolver config). `cwd` is set when `lock` is relative to a subproject.
+fn sync_local_registry(lock: &Path, registry: &Path, cwd: Option<&Path>) -> Result<()> {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("local-registry")
+        .arg("--no-delete")
+        .arg("--sync")
+        .arg(lock)
+        .arg(registry)
+        .stdout(Stdio::null())
+        .env_clear()
+        .envs(cargo_env());
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    log::info!("{cmd:?}");
+    cmd.status()?;
+    Ok(())
+}
+
 fn init_rel_check() -> Result<()> {
-    fn prepare_for_directory(project: &Path) -> Result<()> {
+    fn prepare_for_directory(project: &Path, registry: &Path) -> Result<()> {
         log::info!("Processing {}", project.display());
 
         let _ = std::fs::remove_file(project.join("Cargo.lock"));
 
         // make sure we have the `Cargo.lock` file
-        let status = std::process::Command::new("cargo")
+        let status = Command::new("cargo")
             .arg(format!("+{}", toolchain()))
             .arg("metadata")
             .arg("--format-version=1")
-            .current_dir(&project)
-            .stdout(std::process::Stdio::null())
+            .current_dir(project)
+            .stdout(Stdio::null())
             .status()?;
-
         if !status.success() {
             log::warn!("Failed");
         }
 
         // add all dependencies referenced by the lock file
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.arg("local-registry");
-        cmd.arg("--no-delete");
-        cmd.arg("--sync");
-        cmd.arg("Cargo.lock");
-        cmd.arg(windows_safe_path(
-            &std::path::PathBuf::from("target/local-registry")
-                .canonicalize()
-                .unwrap(),
-        ));
-        cmd.stdout(std::process::Stdio::null());
-        cmd.env_clear();
-        cmd.envs(
-            std::env::vars()
-                .into_iter()
-                .filter(|(k, _)| !k.starts_with("CARGO")),
-        );
-        cmd.current_dir(&project);
-
-        log::info!("{:?}", cmd);
-        cmd.status()?;
-        Ok(())
+        sync_local_registry(Path::new("Cargo.lock"), registry, Some(project))
     }
 
     download_release_plan()?;
@@ -259,103 +271,28 @@ fn init_rel_check() -> Result<()> {
         std::fs::remove_dir_all("target/local-registry")?;
     }
     std::fs::create_dir("target/local-registry")?;
+    let registry = local_registry_path()?;
 
     // prepare latest released versions
-    prepare_for_directory(Path::new("init-local-registry"))?;
+    prepare_for_directory(Path::new("init-local-registry"), &registry)?;
 
     // prepare versions from compile-tests - might not be latest released
     for dir in std::fs::read_dir("compile-tests")? {
-        if let Ok(dir) = dir {
-            if dir.file_type()?.is_dir() {
-                prepare_for_directory(&dir.path())?;
-            }
+        let dir = dir?;
+        if dir.file_type()?.is_dir() {
+            prepare_for_directory(&dir.path(), &registry)?;
         }
     }
 
-    // install dependencies needed for build-std
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.arg("local-registry");
-    cmd.arg("--no-delete");
-    cmd.arg("--sync");
-    cmd.arg(format!(
-        "{}/lib/rustlib/src/rust/library/Cargo.lock",
-        toolchain_folder(&toolchain())?.display()
-    ));
-    cmd.arg("target/local-registry");
-    cmd.stdout(std::process::Stdio::null());
-    cmd.env_clear();
-    cmd.envs(
-        std::env::vars()
-            .into_iter()
-            .filter(|(k, _)| !k.starts_with("CARGO")),
-    );
+    // Sync the build-std lock for every toolchain we build with: `esp` for the
+    // registry build itself, plus `nightly`/`stable` so examples run later via
+    // the normal xtask resolve against this same registry.
+    for toolchain in [toolchain().as_str(), "nightly", "stable"] {
+        sync_local_registry(&build_std_lock(toolchain)?, &registry, None)?;
+    }
 
-    log::info!("{:?}", cmd);
-    cmd.status()?;
-
-    // "for reasons" (e.g. running examples later via the "normal" xtask) also do it for other
-    // toolchains
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.arg("local-registry");
-    cmd.arg("--no-delete");
-    cmd.arg("--sync");
-    cmd.arg(format!(
-        "{}/lib/rustlib/src/rust/library/Cargo.lock",
-        toolchain_folder("nightly")?.display()
-    ));
-    cmd.arg("target/local-registry");
-    cmd.stdout(std::process::Stdio::null());
-    cmd.env_clear();
-    cmd.envs(
-        std::env::vars()
-            .into_iter()
-            .filter(|(k, _)| !k.starts_with("CARGO")),
-    );
-
-    log::info!("{:?}", cmd);
-    cmd.status()?;
-
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.arg("local-registry");
-    cmd.arg("--no-delete");
-    cmd.arg("--sync");
-    cmd.arg(format!(
-        "{}/lib/rustlib/src/rust/library/Cargo.lock",
-        toolchain_folder("stable")?.display()
-    ));
-    cmd.arg("target/local-registry");
-    cmd.stdout(std::process::Stdio::null());
-    cmd.env_clear();
-    cmd.envs(
-        std::env::vars()
-            .into_iter()
-            .filter(|(k, _)| !k.starts_with("CARGO")),
-    );
-
-    log::info!("{:?}", cmd);
-    cmd.status()?;
-
-    // and lastly do it for the xtask itself
-    let mut cmd = std::process::Command::new("cargo");
-    cmd.arg("local-registry");
-    cmd.arg("--no-delete");
-    cmd.arg("--sync");
-    cmd.arg("Cargo.lock");
-    cmd.arg(windows_safe_path(
-        &std::path::PathBuf::from("target/local-registry")
-            .canonicalize()
-            .unwrap(),
-    ));
-    cmd.stdout(std::process::Stdio::null());
-    cmd.env_clear();
-    cmd.envs(
-        std::env::vars()
-            .into_iter()
-            .filter(|(k, _)| !k.starts_with("CARGO")),
-    );
-
-    log::info!("{:?}", cmd);
-    cmd.status()?;
+    // and lastly the xtask itself
+    sync_local_registry(Path::new("Cargo.lock"), &registry, None)?;
 
     Ok(())
 }
