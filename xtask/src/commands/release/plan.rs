@@ -570,8 +570,8 @@ fn build_dependents(workspace: &Path) -> Result<HashMap<Package, Vec<Package>>> 
 /// Remove the excluded packages from `plan_packages`, along with any package
 /// that becomes private to the excluded set (every published dependent removed).
 ///
-/// Version consistency of what remains is left to [`validate_release_closure`],
-/// so exclusions that stay compatible are allowed and only genuine
+/// Version consistency of what remains is left to [`validate_plan`], so
+/// exclusions that stay compatible are allowed and only genuine
 /// incompatibilities are rejected.
 fn apply_exclusions(
     workspace: &Path,
@@ -1294,6 +1294,7 @@ mod tests {
             .filter(|(pkg, _)| !releasing.contains_key(pkg))
             .map(|(pkg, reqs)| (*pkg, reqs.clone()))
             .collect()
+    }
 
     #[test]
     fn closure_full_release_is_consistent() {
