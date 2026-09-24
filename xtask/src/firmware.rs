@@ -986,11 +986,14 @@ mod tests {
     }
 
     #[test]
-    fn bt_predicate_excludes_esp32s31() {
+    fn bt_predicate_selects_bt_chips() {
         let selected = chips("bt_driver_supported");
-        assert!(!selected.contains(&Chip::Esp32s31));
-        // esp32h2 has a Bluetooth driver but no Wi-Fi one.
+        // esp32h2 has a Bluetooth driver but no Wi-Fi one, and esp32s31 gained a
+        // BLE driver (#6332). Radio-less chips (esp32s2, esp32p4) are excluded.
         assert!(selected.contains(&Chip::Esp32h2));
+        assert!(selected.contains(&Chip::Esp32s31));
+        assert!(!selected.contains(&Chip::Esp32s2));
+        assert!(!selected.contains(&Chip::Esp32p4));
     }
 
     #[test]
