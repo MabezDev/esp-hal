@@ -736,6 +736,17 @@ mod twai {
         }
 
         #[test]
+        fn test_send_request(mut ctx: Context<Blocking>) {
+            let frame = EspTwaiFrame::new_remote(StandardId::ZERO, 4).unwrap();
+
+            assert!(frame.is_remote_request());
+            assert_eq!(frame.data(), &[]);
+            assert_eq!(frame.data_length_code(), 4);
+
+            block!(ctx.twai.transmit(&frame)).unwrap();
+        }
+
+        #[test]
         // The receive FIFO holds 64 bytes, four 8-byte standard frames; later
         // frames overrun it. A blocking receiver must see the overrun once
         // and then an empty FIFO, not the same overrun entry for ever.
