@@ -17,10 +17,14 @@ on:
     # cancel the run in progress. `calculate` reads labels live instead, so
     # "Re-run all jobs" picks up labels added after the run started.
     # Re-run after removing `skip-ci-non-code-change`: the merge queue does not
-    # run `esp-hal` or `xtensa-lld`, so a stale green run would skip them.
+    # run `esp-hal`, `xtensa-lld` or `docs`, so a stale green run would skip them.
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   workflow_dispatch:
+  # Merge queue runs can only restore caches saved on main, and nothing else
+  # runs CI there. This run exists to save them.
+  schedule:
+    - cron: "0 2 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,12 +51,14 @@ jobs:
     if: >
       !github.event.pull_request.draft &&
       (github.event_name != 'pull_request' ||
-      github.event.pull_request.state != 'closed')
+      github.event.pull_request.state != 'closed') &&
+      (github.event_name != 'schedule' || github.repository_owner == 'esp-rs')
     runs-on: ubuntu-latest
     outputs:
       labels: ${{ steps.labels.outputs.labels }}
       packages: ${{ steps.labels.outputs.packages }}
       run-build: ${{ steps.decide.outputs.run-build }}
+      run-template: ${{ steps.decide.outputs.run-template }}
       run-docs: ${{ steps.decide.outputs.run-docs }}
       run-msrv: ${{ steps.decide.outputs.run-msrv }}
       run-host-tests: ${{ steps.decide.outputs.run-host-tests }}
@@ -101,21 +107,29 @@ jobs:
           SEMVER=true
           HIL=false
 
+          # In the queue `docs` never caught a failure the PR run had not.
           if [[ "${{ github.event_name }}" == "merge_group" ]]; then
-            BUILD=false
+            BUILD=false; DOCS=false
             HIL=true
+          fi
+          TEMPLATE=$BUILD
+
+          # The nightly run only needs the jobs that save a rust-cache.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            BUILD=false; SEMVER=false
           fi
 
           # `skip-ci-non-code-change` only skips building/testing; API checks (semver) still run.
           # Use the dedicated `skip-semver-checks` label to skip semver checks.
           if echo "$LABELS" | grep -qw 'skip-ci-non-code-change'; then
             BUILD=false; DOCS=false; MSRV=false; HOST=false
-            HIL=false
+            HIL=false; TEMPLATE=false
           fi
           if echo "$LABELS" | grep -qw 'skip-semver-checks'; then SEMVER=false; fi
 
           for pair in \
             "run-build=$BUILD" \
+            "run-template=$TEMPLATE" \
             "run-docs=$DOCS" \
             "run-msrv=$MSRV" \
             "run-host-tests=$HOST" \
@@ -124,7 +138,7 @@ jobs:
             echo "$pair" >> "$GITHUB_OUTPUT"
           done
 
-          echo "Decision: build=$BUILD docs=$DOCS msrv=$MSRV host=$HOST hil=$HIL semver=$SEMVER"
+          echo "Decision: build=$BUILD template=$TEMPLATE docs=$DOCS msrv=$MSRV host=$HOST hil=$HIL semver=$SEMVER"
 
   # Merge freeze — see documentation/CONTRIBUTING.md.
   #
@@ -261,9 +275,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: docs-${{ matrix.group }}
-          # Every merge_group run gets a unique ephemeral ref, so a cache saved
-          # there can never be restored. Restore everywhere, save elsewhere.
-          save-if: ${{ github.event_name != 'merge_group' }}
+          # Only main-scoped caches are visible to the merge queue and to every
+          # PR; PR-scoped saves only evict them under the 10 GB repo limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Resolve chips for this group
         id: chips
@@ -327,7 +341,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: msrv-${{ matrix.group }}
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Resolve chips for this group
         id: chips
@@ -413,7 +427,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: host-tests
-          save-if: ${{ github.event_name != 'merge_group' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             . -> target
             extras/bench-server -> target
@@ -484,7 +498,7 @@ jobs:
 
   template:
     needs: calculate
-    if: needs.calculate.outputs.run-build == 'true'
+    if: needs.calculate.outputs.run-template == 'true'
     runs-on: ubuntu-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -508,6 +522,8 @@ jobs:
           alias: "true"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install esp-generate
         run: |
@@ -530,10 +546,12 @@ jobs:
   # --------------------------------------------------------------------------
   # Check links in .rs, .md, and .toml files
   #
-  # Deliberately absent from `ci-result` below.
+  # Deliberately absent from `ci-result` below, so it is pointless in the
+  # merge queue.
 
   link-check:
     needs: calculate
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

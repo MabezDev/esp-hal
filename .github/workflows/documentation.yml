@@ -107,6 +107,8 @@ jobs:
       matrix:
         packages: ${{ fromJson(needs.setup.outputs.packages) }}
     runs-on: ubuntu-latest
+    # Only a manual run builds the tag; every other run builds the triggering commit.
+    name: ${{ github.event_name == 'workflow_dispatch' && format('build ({0} @ {1})', matrix.packages.name, matrix.packages.tag) || format('build ({0})', matrix.packages.name) }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-toolchains
