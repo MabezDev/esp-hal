@@ -5,7 +5,11 @@
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
     holding buffers for the duration of a data transfer."
 )]
+//%if chip.riscv && option("stack-smashing-protection")
+//+#![deny(clippy::large_unopt_stack_frames)]
+//%else
 #![deny(clippy::large_stack_frames)]
+//%endif
 
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
@@ -74,7 +78,11 @@ const L2CAP_CHANNELS_MAX: usize = 2; // Signal + ATT
 esp_bootloader_esp_idf::esp_app_desc!();
 
 #[allow(
+//%if chip.riscv && option("stack-smashing-protection")
+//+    clippy::large_unopt_stack_frames,
+//%else
     clippy::large_stack_frames,
+//%endif
     reason = "it's not unusual to allocate larger buffers etc. in main"
 )]
 #[esp_rtos::main]
